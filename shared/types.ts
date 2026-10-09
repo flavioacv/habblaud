@@ -10,9 +10,10 @@ export type AgentKind = 'main' | 'sub';
  * De qual ferramenta vem o agente (ou a conta, a fonte, a sessão, o pedido). Nos tipos do protocolo o campo
  * `provider` é opcional e AUSENTE quer dizer 'claude' (tudo o que existia antes do Codex continua igual).
  * - claude: Claude Code;
- * - codex: OpenAI Codex (CLI `codex` e o app desktop, que gravam no mesmo CODEX_HOME).
+ * - codex: OpenAI Codex (CLI `codex` e o app desktop, que gravam no mesmo CODEX_HOME);
+ * - antigravity: Google Antigravity (CLI `agy` e IDE/app, que gravam em ~/.gemini/antigravity-cli).
  */
-export type Provider = 'claude' | 'codex';
+export type Provider = 'claude' | 'codex' | 'antigravity';
 
 /**
  * Estado de alto nível de um agente — é o que dirige o comportamento do personagem.
@@ -279,9 +280,10 @@ export interface AccountUsage {
    * - 'statusline': capturado ao vivo e gravado em ~/.habblaud/usage/<conta>.json pelo mod do Habblaud
    *   (mod/habblaud, recomendado) ou pelo scripts/statusline-tap.mjs (campo rate_limits do statusline);
    * - 'cache': `cachedUsageUtilization` gravado pelo próprio Claude Code (atualiza quando alguém roda /usage);
-   * - 'codex': `rate_limits` dos arquivos de sessão do Codex (só se renovam enquanto alguma sessão roda).
+   * - 'codex': `rate_limits` dos arquivos de sessão do Codex (só se renovam enquanto alguma sessão roda);
+   * - 'antigravity': uso/tokens das sessões do Antigravity (calculado ou obtido dos transcripts e presença).
    */
-  source: 'cache' | 'statusline' | 'codex';
+  source: 'cache' | 'statusline' | 'codex' | 'antigravity';
   /** Quem gravou o arquivo ao vivo ('statusline'): o mod do Habblaud no Claude Code ou o tap de statusline. */
   via?: 'mod' | 'tap';
   /**

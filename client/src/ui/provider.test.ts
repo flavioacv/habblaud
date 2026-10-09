@@ -18,6 +18,7 @@ describe('ferramenta (Claude Code ou Codex)', () => {
     expect(providerOf(undefined)).toBe('claude');
     expect(providerOf({})).toBe('claude');
     expect(providerOf({ provider: 'codex' })).toBe('codex');
+    expect(providerOf({ provider: 'antigravity' })).toBe('antigravity');
     expect(isCodex({ provider: 'codex' })).toBe(true);
     expect(isCodex({ provider: 'claude' })).toBe(false);
     expect(isCodex(null)).toBe(false);

@@ -7,7 +7,7 @@ import type { AccountInfo, OfficeSnapshot, Provider } from '../../../shared/type
 import { shortcutHint } from './model';
 
 /** Nome de cada ferramenta como aparece nos textos. */
-export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' };
+export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity' };
 
 /** Ferramenta de um agente, conta, sessão ou pedido (ausente = Claude Code). */
 export function providerOf(x: { provider?: Provider } | null | undefined): Provider {
@@ -18,6 +18,10 @@ export function isCodex(x: { provider?: Provider } | null | undefined): boolean 
   return x?.provider === 'codex';
 }
 
+export function isAntigravity(x: { provider?: Provider } | null | undefined): boolean {
+  return x?.provider === 'antigravity';
+}
+
 /**
  * O id de conta tem cara de pasta do Codex (".codex", ".codex-trabalho", ".codex~2", "demo:.codex")? Só para quando a
  * conta já não está no snapshot (ex.: histórico, "Meu dia"): com a conta à mão, vale o `provider` dela.
@@ -26,48 +30,63 @@ export function looksLikeCodexId(id: string): boolean {
   return /(?:^|[:/\\])\.?codex(?:[-_.~]|$)/i.test(id);
 }
 
+export function looksLikeAntigravityId(id: string): boolean {
+  return /(?:^|[:/\\])\.?(?:antigravity|gemini)(?:[-_.~]|$)/i.test(id);
+}
+
 /** Ferramenta da conta: a do snapshot; sem ela, a dica de quem chamou ou o jeito do id. */
 export function accountProvider(account: Pick<AccountInfo, 'provider'> | undefined, fallbackId = '', hint?: Provider): Provider {
   if (account) return providerOf(account);
-  return hint ?? (looksLikeCodexId(fallbackId) ? 'codex' : 'claude');
+  if (hint) return hint;
+  if (looksLikeAntigravityId(fallbackId)) return 'antigravity';
+  return looksLikeCodexId(fallbackId) ? 'codex' : 'claude';
 }
 
 /**
- * Letra do chip de uma conta que não está no snapshot: a primeira letra depois do prefixo da pasta
- * (".claude-conta2" -> "C", ".codex-trabalho" -> "T"). A pasta padrão do Codex (".codex") vira "X"; a do Claude Code,
- * "?" (como antes). Nunca devolve "." nem vazio.
+ * Letra do chip de uma conta que não está no snapshot.
  */
 export function fallbackShort(id: string, provider: Provider = accountProvider(undefined, id)): string {
   const rest = id
     .replace(/^.*:/, '')
     .replace(/~\d+$/, '')
-    .replace(/^\.?(?:claude|codex)(?=[-_.]|$)[-_.]?/i, '');
+    .replace(/^\.?(?:claude|codex|antigravity|gemini)(?=[-_.]|$)[-_.]?/i, '');
   const letter = /[\p{L}\p{N}]/u.exec(rest)?.[0];
   if (letter) return letter.toUpperCase();
-  return provider === 'codex' ? 'X' : '?';
+  if (provider === 'codex') return 'X';
+  if (provider === 'antigravity') return 'A';
+  return '?';
 }
 
-/** O selo "Codex" ao lado do nome da conta (não repete quando o nome já diz "Codex"). */
+/** O selo ao lado do nome da conta (não repete quando o nome já diz a ferramenta). */
 export function showsProviderTag(provider: Provider, accountName = ''): boolean {
-  return provider === 'codex' && !/codex/i.test(accountName);
+  if (provider === 'codex') return !/codex/i.test(accountName);
+  if (provider === 'antigravity') return !/antigravity/i.test(accountName);
+  return false;
 }
 
-/** Rótulo do chip da conta (dica e leitores de tela): "Conta C (dev@x.com)", "Codex · plano Team". */
+/** Rótulo do chip da conta (dica e leitores de tela). */
 export function accountChipLabel(account: Pick<AccountInfo, 'name' | 'email' | 'plan' | 'provider'> | undefined, fallbackId: string, provider: Provider): string {
-  if (!account) return fallbackId ? `${fallbackId}${provider === 'codex' ? ' · Codex' : ''}` : 'Conta desconhecida';
-  if (provider !== 'codex') return `${account.name}${account.email ? ` (${account.email})` : ''}`;
-  const tag = showsProviderTag(provider, account.name) ? ' · Codex' : '';
+  if (!account) return fallbackId ? `${fallbackId}${provider !== 'claude' ? ` · ${PROVIDER_NAME[provider]}` : ''}` : 'Conta desconhecida';
+  if (provider === 'claude') return `${account.name}${account.email ? ` (${account.email})` : ''}`;
+  const tag = showsProviderTag(provider, account.name) ? ` · ${PROVIDER_NAME[provider]}` : '';
   return `${account.name}${tag}${account.plan ? ` · plano ${account.plan}` : ''}`;
 }
 
 /**
- * Texto do escritório vazio. Os atalhos ("atalhos c ou d") são só das contas do Claude Code, que vêm de aliases do
- * shell (a letra de uma conta do Codex não é um atalho); o Codex só entra quando há uma conta dele.
+ * Texto do escritório vazio.
  */
 export function emptyOfficeHint(accounts: readonly Pick<AccountInfo, 'short' | 'provider'>[]): string {
-  const keys = shortcutHint(accounts.filter((a) => !isCodex(a)));
-  if (!accounts.some(isCodex)) return `Abra o Claude Code em qualquer projeto${keys ? ` (${keys})` : ''} e veja seu agente chegar.`;
-  return `Abra o Claude Code${keys ? ` (${keys})` : ''} ou o Codex em qualquer projeto e veja seu agente chegar.`;
+  const keys = shortcutHint(accounts.filter((a) => !isCodex(a) && !isAntigravity(a)));
+  const hasCodex = accounts.some(isCodex);
+  const hasAntigravity = accounts.some(isAntigravity);
+
+  if (!hasCodex && !hasAntigravity) {
+    return `Abra o Claude Code em qualquer projeto${keys ? ` (${keys})` : ''} e veja seu agente chegar.`;
+  }
+  const others: string[] = [];
+  if (hasCodex) others.push('o Codex');
+  if (hasAntigravity) others.push('o Antigravity');
+  return `Abra o Claude Code${keys ? ` (${keys})` : ''} ou ${others.join(' ou ')} em qualquer projeto e veja seu agente chegar.`;
 }
 
 /** Algum pedido de permissão do Codex esperando: o prazo é curto e o cartão conta os segundos (relógio de 1 s). */

@@ -12,13 +12,14 @@ import type { UiContext } from './context';
 import { h, KeyedList, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
 import { FIVE_HOURS_MS, relativeTime, usageLevel, usageWindowView, WEEK_MS, type UsageWindowView } from './format';
 import { ICONS } from './icons';
-import { isCodex } from './provider';
+import { isAntigravity, isCodex } from './provider';
 import { createAccountChip, createProviderTag, updateAccountChip, updateProviderTag } from './widgets';
 
 export const SOURCE_LABEL: Record<NonNullable<AccountInfo['usage']>['source'], string> = {
   cache: 'cache do /usage do Claude Code',
   statusline: 'ao vivo (statusline do Claude Code)',
   codex: 'arquivos do Codex',
+  antigravity: 'sessões do Antigravity',
 };
 
 /** Origem para mostrar: o arquivo ao vivo pode ter sido gravado pelo mod do Habblaud ou pelo tap. */
@@ -165,17 +166,18 @@ export function cardState(a: Pick<AccountInfo, 'usage' | 'usageStatus'>): CardSt
   return a.usageStatus === 'ok' ? 'ok' : 'stale';
 }
 
-/** A idade dos números fica sempre à mostra? (Codex: só se renovam enquanto alguma sessão roda.) */
+/** A idade dos números fica sempre à mostra? (Codex e Antigravity: só se renovam enquanto alguma sessão roda.) */
 export function showsUsageAge(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider'>): boolean {
   if (!a.usage) return false;
   const state = cardState(a);
-  return state === 'stale' || (isCodex(a) && state !== 'empty');
+  return state === 'stale' || ((isCodex(a) || isAntigravity(a)) && state !== 'empty');
 }
 
-/** Linha embaixo do nome: e-mail; no Codex (sem e-mail), o plano; nas outras, a pasta. */
+/** Linha embaixo do nome: e-mail; no Codex e Antigravity, o plano; nas outras, a pasta. */
 export function usageSubtitle(a: Pick<AccountInfo, 'email' | 'plan' | 'configDir' | 'provider'>): string {
   if (a.email) return a.email;
   if (isCodex(a)) return a.plan ? `plano ${a.plan}` : 'Codex';
+  if (isAntigravity(a)) return a.plan ? `plano ${a.plan}` : 'Antigravity';
   return a.configDir;
 }
 
@@ -183,7 +185,7 @@ export function usageSubtitle(a: Pick<AccountInfo, 'email' | 'plan' | 'configDir
 export function usageMessage(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider'>): [string, string] {
   const state = cardState(a);
   if (state === 'noquota') return ['sem cota', 'sem cota'];
-  if (isCodex(a)) return ['sem dados ainda', 'sem dados'];
+  if (isCodex(a) || isAntigravity(a)) return ['sem dados ainda', 'sem dados'];
   return ['sem dados de uso', 'sem dados'];
 }
 
