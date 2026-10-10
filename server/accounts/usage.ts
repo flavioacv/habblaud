@@ -1,4 +1,4 @@
-// Uso do plano (sessão de 5h e semanal) por conta, vindo de fontes locais:
+// Uso do plano (janelas de 5h, semana e 30 dias) por conta, vindo de fontes locais:
 // - 'statusline': rate_limits que o Claude Code envia ao statusline, gravados pelo
 //   scripts/statusline-tap.mjs (recomendado: ao vivo);
 // - 'cache': cachedUsageUtilization gravado pelo próprio Claude Code (quando alguém roda /usage);
@@ -12,7 +12,7 @@ export type UsageStatus = AccountInfo['usageStatus'];
 
 /** Números com mais de 30 min são exibidos como "desatualizados". */
 export const STALE_AFTER_MS = 30 * 60_000;
-const WINDOW_KEYS = ['fiveHour', 'sevenDay', 'sevenDayOpus', 'sevenDaySonnet'] as const;
+const WINDOW_KEYS = ['fiveHour', 'sevenDay', 'thirtyDay', 'sevenDayOpus', 'sevenDaySonnet'] as const;
 
 function num(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return v;

@@ -1,4 +1,4 @@
-// Cartões de USO POR CONTA na barra superior: sessão de 5 horas e semanal, com reinício e origem dos números.
+// Cartões de USO POR CONTA na barra superior: janelas de 5 horas, semana e 30 dias, com reinício e origem.
 // Regras de apresentação:
 // - número velho nunca passa por atual: janela que já renovou depois da leitura mostra "—" e "renovada";
 //   números antigos ficam acinzentados com a idade ("há 6 d") no cabeçalho ou, no celular, um selo no chip;
@@ -10,7 +10,7 @@
 import type { AccountInfo } from '../../../shared/types';
 import type { UiContext } from './context';
 import { h, KeyedList, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
-import { FIVE_HOURS_MS, relativeTime, usageLevel, usageWindowView, WEEK_MS, type UsageWindowView } from './format';
+import { FIVE_HOURS_MS, relativeTime, THIRTY_DAYS_MS, usageLevel, usageWindowView, WEEK_MS, type UsageWindowView } from './format';
 import { ICONS } from './icons';
 import { isAntigravity, isCodex, PROVIDER_NAME } from './provider';
 import { createAccountChip, createProviderTag, updateAccountChip, updateProviderTag } from './widgets';
@@ -69,6 +69,7 @@ interface CardRefs {
   meters: HTMLElement;
   five: Meter;
   week: Meter;
+  thirtyDay: Meter;
   msg: HTMLElement;
   msgLong: HTMLElement;
   msgShort: HTMLElement;
@@ -154,7 +155,7 @@ export function createUsageSetup(): HTMLElement {
 export type CardState = 'ok' | 'stale' | 'empty' | 'noquota';
 
 function hasWindows(a: Pick<AccountInfo, 'usage'>): boolean {
-  return !!a.usage && !!(a.usage.fiveHour || a.usage.sevenDay);
+  return !!a.usage && !!(a.usage.fiveHour || a.usage.sevenDay || a.usage.thirtyDay);
 }
 
 /** Estado efetivo do cartão. */
@@ -245,7 +246,8 @@ export class UsageCards {
     const state = h('span', { class: 'ui-usage-card__state' }, stateIcon, stateText);
     const five = createMeter('5h', '5h', 'Sessão de 5 horas');
     const week = createMeter('Semana', 'Sem.', 'Limite semanal');
-    const meters = h('div', { class: 'ui-usage-card__meters' }, five.el, week.el);
+    const thirtyDay = createMeter('30 dias', '30d', 'Janela de 30 dias');
+    const meters = h('div', { class: 'ui-usage-card__meters' }, five.el, week.el, thirtyDay.el);
     const msgLong = h('span', { class: 'ui-usage-card__msg-long', text: 'sem dados de uso' });
     const msgShort = h('span', { class: 'ui-usage-card__msg-short', text: 'sem dados', attrs: { 'aria-hidden': 'true' } });
     const howLong = h('span', { class: 'ui-usage-card__how-long', text: 'Como ativar' });
@@ -286,6 +288,7 @@ export class UsageCards {
       meters,
       five,
       week,
+      thirtyDay,
       msg,
       msgLong,
       msgShort,
@@ -317,11 +320,20 @@ export class UsageCards {
     setVariant(card, 'is-', state);
     const five = usage ? usageWindowView(usage.fiveHour, usage.fetchedAt, now, FIVE_HOURS_MS) : null;
     const week = usage ? usageWindowView(usage.sevenDay, usage.fetchedAt, now, WEEK_MS) : null;
+    const thirtyDay = usage ? usageWindowView(usage.thirtyDay, usage.fetchedAt, now, THIRTY_DAYS_MS) : null;
     const showMeters = hasWindows(a);
     setHidden(r.meters, !showMeters);
+    // Codex tem planos que informam uma janela mensal em vez das janelas de 5 h/semana.
+    // Mostra só as janelas existentes nesse caso; continua exibindo as barras antigas como antes.
+    if (codex) {
+      setHidden(r.five.el, !usage?.fiveHour);
+      setHidden(r.week.el, !usage?.sevenDay);
+    }
+    setHidden(r.thirtyDay.el, !usage?.thirtyDay);
     if (usage && showMeters) {
       updateMeter(r.five, five, 'Sessão de 5 horas');
       updateMeter(r.week, week, 'Semana');
+      updateMeter(r.thirtyDay, thirtyDay, 'Janela de 30 dias');
     }
     r.meters.classList.toggle('is-dim', state !== 'ok');
 
@@ -364,10 +376,10 @@ export class UsageCards {
         ? 'Como o uso do Antigravity chega ao Habblaud'
         : 'Como mostrar o uso desta conta (abre a ajuda em “Contas e uso”)',
     );
-    this.updateTip(r, a, state, five, week, now);
+    this.updateTip(r, a, state, five, week, thirtyDay, now);
   }
 
-  private updateTip(r: CardRefs, a: AccountInfo, state: CardState, five: UsageWindowView | null, week: UsageWindowView | null, now: number): void {
+  private updateTip(r: CardRefs, a: AccountInfo, state: CardState, five: UsageWindowView | null, week: UsageWindowView | null, thirtyDay: UsageWindowView | null, now: number): void {
     const codex = isCodex(a);
     const agy = isAntigravity(a);
     const provName = codex ? 'Codex' : agy ? 'Antigravity' : '';
@@ -381,9 +393,10 @@ export class UsageCards {
     rows.push(['Pasta', a.configDir]);
     rows.push(['Sessões abertas', String(a.sessions)]);
     const u = a.usage;
-    if (u && (u.fiveHour || u.sevenDay)) {
-      rows.push(['Sessão de 5 h', five?.summary ?? '—']);
-      rows.push(['Semana', week?.summary ?? '—']);
+    if (u && (u.fiveHour || u.sevenDay || u.thirtyDay)) {
+      if (u.fiveHour || (!codex && !agy)) rows.push(['Sessão de 5 h', five?.summary ?? '—']);
+      if (u.sevenDay || (!codex && !agy)) rows.push(['Semana', week?.summary ?? '—']);
+      if (u.thirtyDay) rows.push(['30 dias', thirtyDay?.summary ?? '—']);
       // Opus e Sonnet no Claude Code; no Antigravity, representa a cota do grupo Claude/GPT
       const opus = codex || agy ? null : usageWindowView(u.sevenDayOpus, u.fetchedAt, now, WEEK_MS);
       const sonnet = codex ? null : usageWindowView(u.sevenDaySonnet, u.fetchedAt, now, WEEK_MS);

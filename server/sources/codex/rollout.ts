@@ -124,10 +124,10 @@ export function parseSessionMeta(payload: Rec, at?: number): RolloutMeta {
 
 // ------------------------------------------------------------------ uso do plano
 
-/** Janelas do Codex pela duração (não pela posição): 300 min = sessão de 5 h, 10080 min = semana. */
-const WINDOW_BY_MINUTES: Record<number, 'fiveHour' | 'sevenDay'> = { 300: 'fiveHour', 10080: 'sevenDay' };
+/** Janelas do Codex pela duração (não pela posição): 5 h, semana e período de 30 dias. */
+const WINDOW_BY_MINUTES: Record<number, 'fiveHour' | 'sevenDay' | 'thirtyDay'> = { 300: 'fiveHour', 10080: 'sevenDay', 43200: 'thirtyDay' };
 
-function usageWindow(raw: unknown): { key: 'fiveHour' | 'sevenDay'; window: UsageWindow } | undefined {
+function usageWindow(raw: unknown): { key: 'fiveHour' | 'sevenDay' | 'thirtyDay'; window: UsageWindow } | undefined {
   const w = rec(raw);
   const minutes = num(w?.window_minutes);
   const used = num(w?.used_percent);
@@ -155,7 +155,7 @@ export function usageFromRateLimits(raw: unknown, at: number): AccountUsage | un
     if (parsed && !usage[parsed.key]) usage[parsed.key] = parsed.window;
   }
   if ((rl.primary === null || rl.primary === undefined) && str(rl.rate_limit_reached_type)) usage.noQuota = true;
-  return usage.fiveHour || usage.sevenDay || usage.noQuota ? usage : undefined;
+  return usage.fiveHour || usage.sevenDay || usage.thirtyDay || usage.noQuota ? usage : undefined;
 }
 
 // ------------------------------------------------------------------ comandos

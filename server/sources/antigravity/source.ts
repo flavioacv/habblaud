@@ -40,20 +40,21 @@ const QUOTA_REFRESH_MS = 60_000;
 
 export interface RunningAntigravityProcess {
   pid: number;
-  convId: string;
+  /** Alguns builds do Antigravity ocultam --conversation no título do processo. */
+  convId?: string;
   cwd?: string;
 }
 
-/** Retorna os processos agy/antigravity rodando na máquina agora com seu CWD, indexados pelo convId. */
+/** Retorna processos agy/antigravity ativos com CWD e, quando disponível, o ID da conversa. */
 export function runningAntigravityProcesses(): Map<string, RunningAntigravityProcess> {
   const map = new Map<string, RunningAntigravityProcess>();
   try {
     const out = execSync('ps -eo pid,command', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     for (const line of out.split('\n')) {
-      const m = line.match(/^\s*(\d+)\s+.*(?:agy|antigravity)\s+.*--conversation=([0-9a-fA-F-]+)/);
-      if (m) {
+      const m = line.match(/^\s*(\d+)\s+(.+)$/);
+      if (m && /(?:^|\s)(?:agy|antigravity)(?:\s|$)/i.test(m[2])) {
         const pid = parseInt(m[1], 10);
-        const convId = m[2];
+        const convId = m[2].match(/--conversation=([0-9a-fA-F-]+)/)?.[1];
         let cwd: string | undefined;
         try {
           if (process.platform === 'darwin') {
@@ -70,7 +71,10 @@ export function runningAntigravityProcesses(): Map<string, RunningAntigravityPro
         } catch {
           // ignore
         }
-        map.set(convId, { pid, convId, cwd });
+        // No macOS, `ps` pode mostrar somente "agy". Mantemos o processo pelo PID
+        // para associá-lo ao workspace e ao lock da conversa em pollAccount.
+        const processInfo: RunningAntigravityProcess = { pid, ...(convId ? { convId } : {}), cwd };
+        map.set(convId ?? `@pid:${pid}`, processInfo);
       }
     }
   } catch {
@@ -81,7 +85,7 @@ export function runningAntigravityProcesses(): Map<string, RunningAntigravityPro
 
 /** Retorna os IDs de conversas que possuem processo agy rodando na máquina agora. */
 export function runningAntigravityConversations(): Set<string> {
-  return new Set(runningAntigravityProcesses().keys());
+  return new Set([...runningAntigravityProcesses().values()].flatMap((p) => p.convId ? [p.convId] : []));
 }
 
 export interface AntigravitySourceOptions {
@@ -261,6 +265,31 @@ export class AntigravitySource implements AgentSource {
     // Mapa de workspace por conversa lido do history.jsonl
     const workspaces = this.readWorkspaces(acc);
 
+    // Associa processos cujo título não expõe --conversation (comum no macOS)
+    // ao lock mais recente do mesmo workspace. Locks antigos não vencem um lock
+    // mais novo, e a quantidade de conversas ativadas não excede a de processos.
+    const activeProcesses = new Map(running);
+    const unnamed = [...running.values()].filter((p) => !p.convId && p.cwd && !this.isInternalDir(acc, p.cwd));
+    const candidates = names
+      .filter((name) => name.endsWith('.lock'))
+      .map((name) => {
+        const convId = name.slice(0, -'.lock'.length);
+        const workspace = this.resolveWorkspace(acc, convId, workspaces, running);
+        let modifiedAt = 0;
+        try { modifiedAt = statSync(join(presenceDir, name)).mtimeMs; } catch { /* lock removido durante a leitura */ }
+        return { convId, workspace, modifiedAt };
+      })
+      .filter((c) => c.workspace && unnamed.some((p) => p.cwd === c.workspace) && !running.has(c.convId))
+      .sort((a, b) => b.modifiedAt - a.modifiedAt);
+    const assigned = new Set<string>();
+    for (const proc of unnamed) {
+      const candidate = candidates.find((c) => c.workspace === proc.cwd && !assigned.has(c.convId));
+      if (candidate) {
+        activeProcesses.set(candidate.convId, proc);
+        assigned.add(candidate.convId);
+      }
+    }
+
     for (const name of names) {
       if (!name.endsWith('.lock')) continue;
       const convId = name.slice(0, -'.lock'.length);
@@ -269,7 +298,7 @@ export class AntigravitySource implements AgentSource {
       const transcriptPath = join(acc.dir, 'brain', convId, '.system_generated', 'logs', 'transcript.jsonl');
 
       // Verifica se a conversa está realmente ativa (processo rodando no SO ou lock recém-criado)
-      const isRunning = running.has(convId);
+      const isRunning = activeProcesses.has(convId);
       if (!isRunning) {
         let isStarting = false;
         try {
@@ -287,7 +316,7 @@ export class AntigravitySource implements AgentSource {
 
       let tracker = this.trackers.get(key);
       if (!tracker) {
-        const cwd = this.resolveWorkspace(acc, convId, workspaces, running);
+        const cwd = this.resolveWorkspace(acc, convId, workspaces, activeProcesses);
         const transcriptPath = join(acc.dir, 'brain', convId, '.system_generated', 'logs', 'transcript.jsonl');
 
         tracker = {
@@ -306,7 +335,7 @@ export class AntigravitySource implements AgentSource {
       } else {
         tracker.lastSeenAt = now;
         if (!tracker.cwd) {
-          const resolved = this.resolveWorkspace(acc, convId, workspaces, running);
+          const resolved = this.resolveWorkspace(acc, convId, workspaces, activeProcesses);
           if (resolved) {
             tracker.cwd = resolved;
           }

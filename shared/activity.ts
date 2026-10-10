@@ -761,9 +761,18 @@ export function describeTool(name: string, rawInput: unknown): ActivityDescripti
   }
 }
 
+/** Remove os delimitadores usados para embalar prompts com metadados do ambiente. */
+export function cleanPromptText(text: string): string {
+  return text
+    .replace(/<ADDITIONAL_METADATA\b[^>]*>[\s\S]*$/i, '')
+    .replace(/<\/?USER_REQUEST>/gi, '')
+    .trim();
+}
+
 /** Atividade para um prompt do usuário. */
 export function describePrompt(text: string): ActivityDescription {
-  return make('prompt', '📨', `Nova tarefa: “${truncate(text, 30)}”`, text);
+  const prompt = cleanPromptText(text);
+  return make('prompt', '📨', prompt ? `Nova tarefa: “${truncate(prompt, 30)}”` : 'Nova tarefa', prompt);
 }
 
 export function formatDuration(ms: number): string {

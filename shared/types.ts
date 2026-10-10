@@ -273,6 +273,8 @@ export interface AccountUsage {
   fiveHour?: UsageWindow;
   /** Limite semanal (todos os modelos). */
   sevenDay?: UsageWindow;
+  /** Janela de 30 dias, informada em alguns planos do Codex. */
+  thirtyDay?: UsageWindow;
   sevenDayOpus?: UsageWindow;
   sevenDaySonnet?: UsageWindow;
   /**
@@ -329,7 +331,7 @@ export interface OfficeSnapshot {
   serverTime: number;
   rooms: RoomInfo[];
   agents: AgentInfo[];
-  /** Contas do Claude detectadas (com uso de 5h/semanal quando disponível). */
+  /** Contas detectadas, com as janelas de uso disponíveis para cada plano. */
   accounts: AccountInfo[];
   meta: {
     demo: boolean;

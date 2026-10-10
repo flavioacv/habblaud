@@ -302,7 +302,7 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   "paginated" (padrão) e "legacy"; `.zst` é ignorado com aviso. Status por `task_started`/`task_complete`/
   `turn_aborted`; atividades por `item_completed` (`CommandExecution` como o Bash, `FileChange`, `McpToolCall`,
   mensagens e raciocínio); tokens sem somar o cache de novo (no Codex ele já está dentro da entrada); sem custo; uso do
-  plano por `token_count.rate_limits` (janela de 300 min = 5 h, 10080 = semana; `primary` nulo com
+  plano por `token_count.rate_limits` (janela de 300 min = 5 h, 10080 = semana, 43200 = 30 dias; `primary` nulo com
   `rate_limit_reached_type` = `noQuota`), empurrado com `accounts.setUsage`. Subagentes = threads com
   `source.subagent.thread_spawn.parent_thread_id`; threads internos (guardian, review, compact, memory) ficam de fora.
 - **Terminal e histórico** (`sources/codex/terminal.ts`, `history.ts`): o parser do terminal é escolhido por agente

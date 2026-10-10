@@ -1067,7 +1067,7 @@
   color: inherit;
 }
 
-/* As duas linhas (5h e Semana) dividem as mesmas colunas (subgrid): barras alinhadas e a coluna do
+/* As linhas de uso dividem as mesmas colunas (subgrid): barras alinhadas e a coluna do
    reinício do tamanho do texto mais longo; quem cede espaço é a barra. */
 .ui-usage-card__meters {
   display: grid;

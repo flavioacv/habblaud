@@ -1,6 +1,6 @@
 // Parser de eventos e transcrições do Antigravity (brain/<conversation-id>/.system_generated/logs/transcript.jsonl).
 // Converte passos (step_index, source, type, thinking, tool_calls, tokens...) em atividades e estado para o Office.
-import { describePrompt, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../../shared/activity';
+import { cleanPromptText, describePrompt, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../../shared/activity';
 import type { Activity, AgentStats } from '../../../shared/types';
 import type { ParsedActivity } from '../transcript';
 
@@ -172,13 +172,14 @@ export function parseAntigravityLine(rawLine: string, s: AntigravityState, ctx: 
   if (type === 'USER_INPUT' || source === 'USER_EXPLICIT') {
     const content = str(j.content);
     if (content) {
+      const prompt = cleanPromptText(content);
       if (!s.title) {
-        s.title = truncate(maskSecrets(content.slice(0, 500)), 90);
+        s.title = truncate(maskSecrets(prompt.slice(0, 500)), 90);
         out.changed = true;
       }
       s.turnOpen = true;
       out.signals.push({ type: 'turnStart' });
-      pushActivity(describePrompt(content), { key: `prompt-${stepIndex}` });
+      pushActivity(describePrompt(prompt), { key: `prompt-${stepIndex}` });
     }
     return out;
   }
