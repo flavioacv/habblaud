@@ -12,14 +12,14 @@ import type { UiContext } from './context';
 import { h, KeyedList, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
 import { FIVE_HOURS_MS, relativeTime, usageLevel, usageWindowView, WEEK_MS, type UsageWindowView } from './format';
 import { ICONS } from './icons';
-import { isAntigravity, isCodex } from './provider';
+import { isAntigravity, isCodex, PROVIDER_NAME } from './provider';
 import { createAccountChip, createProviderTag, updateAccountChip, updateProviderTag } from './widgets';
 
 export const SOURCE_LABEL: Record<NonNullable<AccountInfo['usage']>['source'], string> = {
   cache: 'cache do /usage do Claude Code',
   statusline: 'ao vivo (statusline do Claude Code)',
   codex: 'arquivos do Codex',
-  antigravity: 'sessões do Antigravity',
+  antigravity: 'API oficial do Antigravity',
 };
 
 /** Origem para mostrar: o arquivo ao vivo pode ter sido gravado pelo mod do Habblaud ou pelo tap. */
@@ -205,9 +205,9 @@ export function antigravityUsageNote(a: Pick<AccountInfo, 'usage' | 'usageStatus
   if (!isAntigravity(a)) return '';
   const u = a.usage;
   const state = cardState(a);
-  if (state === 'empty') return 'Não precisa instalar nada: os números de uso do modelo chegam com a próxima sessão do Antigravity.';
+  if (state === 'empty') return 'As cotas são obtidas diretamente da API oficial do Antigravity (CloudCode / Gemini).';
   const age = u ? relativeTime(u.fetchedAt, now) : '';
-  return `O Antigravity atualiza as cotas dos modelos Gemini durante as sessões ativas: estes números refletem a última leitura (${age}).`;
+  return `O Antigravity obtém as cotas dos modelos Gemini e Claude/GPT via API oficial da Google: estes números refletem a última leitura (${age}).`;
 }
 
 export class UsageCards {
@@ -307,10 +307,10 @@ export class UsageCards {
     const codex = isCodex(a);
     updateAccountChip(r.chip, a);
     setStyleVar(card, '--acc', a.color);
-    setText(r.name, a.name);
-    updateProviderTag(r.prov, codex ? 'codex' : 'claude', a.name);
+    const provider = a.provider ?? 'claude';
+    updateProviderTag(r.prov, provider, a.name);
     setText(r.email, usageSubtitle(a));
-    setAttr(card, 'aria-label', `${a.name}${codex ? ' (Codex)' : ''}: uso do plano`);
+    setAttr(card, 'aria-label', `${a.name}${provider !== 'claude' ? ` (${PROVIDER_NAME[provider]})` : ''}: uso do plano`);
 
     const usage = a.usage;
     const state = cardState(a);

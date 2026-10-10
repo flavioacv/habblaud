@@ -1,7 +1,7 @@
 // Parser de eventos e transcrições do Antigravity (brain/<conversation-id>/.system_generated/logs/transcript.jsonl).
 // Converte passos (step_index, source, type, thinking, tool_calls, tokens...) em atividades e estado para o Office.
 import { describePrompt, describeTool, maskSecrets, SPECIAL, truncate, type ActivityDescription } from '../../../shared/activity';
-import type { AccountUsage, Activity, AgentStats, UsageWindow } from '../../../shared/types';
+import type { Activity, AgentStats } from '../../../shared/types';
 import type { ParsedActivity } from '../transcript';
 
 type Rec = Record<string, unknown>;
@@ -31,7 +31,6 @@ export interface AntigravityState {
   turnOpen?: boolean;
   firstAt?: number;
   lastAt?: number;
-  usage?: AccountUsage;
   current?: { id: string; kind: Activity['kind']; at: number; callId?: string };
 }
 
@@ -44,7 +43,6 @@ export function createAntigravityState(): AntigravityState {
 export type AntigravitySignal =
   | { type: 'turnStart' }
   | { type: 'turnEnd'; aborted: boolean }
-  | { type: 'usage'; usage: AccountUsage }
   | { type: 'subagentSpawn'; count: number };
 
 export interface AntigravityLineResult {
@@ -167,15 +165,7 @@ export function parseAntigravityLine(rawLine: string, s: AntigravityState, ctx: 
     s.stats.tokensOut += outTokens;
     out.changed = true;
 
-    // Constrói ou atualiza AccountUsage do Antigravity baseado no consumo acumulado do modelo
-    const usage: AccountUsage = {
-      source: 'antigravity',
-      fetchedAt: createdAt,
-      fiveHour: { utilization: Math.min(100, Math.round(((inTokens + cacheTokens + outTokens) / 10_000_000) * 100)) },
-      sevenDay: { utilization: Math.min(100, Math.round(((s.stats.tokensIn + s.stats.tokensOut) / 100_000_000) * 100)) },
-    };
-    s.usage = usage;
-    out.signals.push({ type: 'usage', usage });
+
   }
 
   // 1. Prompt do usuário (USER_INPUT)

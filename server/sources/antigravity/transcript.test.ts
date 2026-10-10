@@ -81,8 +81,6 @@ describe('Antigravity transcript parser', () => {
     expect(state.stats.toolCalls).toBe(1);
     expect(state.stats.tokensIn).toBe(1500);
     expect(state.stats.tokensOut).toBe(200);
-    expect(state.usage).toBeDefined();
-    expect(state.usage?.source).toBe('antigravity');
 
     // Atividades: thinking + chamada de ferramenta (npm test -> test)
     expect(res.activities).toHaveLength(2);

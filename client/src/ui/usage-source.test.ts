@@ -53,8 +53,8 @@ describe('cartão de uso de uma conta do Codex', () => {
 describe('cartão de uso de uma conta do Antigravity', () => {
   const agy = (over: Partial<Acc> = {}): Acc => ({ provider: 'antigravity', usageStatus: 'ok', configDir: '~/.gemini/antigravity-cli', plan: 'Subscription', ...over });
 
-  it('rotula a origem como sessões do Antigravity', () => {
-    expect(sourceLabel({ source: 'antigravity', fetchedAt: 0 })).toBe('sessões do Antigravity');
+  it('rotula a origem como API oficial do Antigravity', () => {
+    expect(sourceLabel({ source: 'antigravity', fetchedAt: 0 })).toBe('API oficial do Antigravity');
   });
 
   it('a idade fica sempre à mostra quando tem uso', () => {

@@ -351,8 +351,6 @@ export class AntigravitySource implements AgentSource {
           t.status = 'idle';
           t.statusAt = now;
           if (t.inOffice) this.opts.office.setStatus(t.key, 'idle');
-        } else if (sig.type === 'usage') {
-          this.opts.accounts.setUsage(t.acc.id, sig.usage);
         }
       }
 
