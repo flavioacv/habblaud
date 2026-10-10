@@ -53,7 +53,7 @@ export function fallbackShort(id: string, provider: Provider = accountProvider(u
   const letter = /[\p{L}\p{N}]/u.exec(rest)?.[0];
   if (letter) return letter.toUpperCase();
   if (provider === 'codex') return 'X';
-  if (provider === 'antigravity') return 'A';
+  if (provider === 'antigravity') return 'G';
   return '?';
 }
 

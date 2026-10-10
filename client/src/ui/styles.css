@@ -365,6 +365,31 @@
   --step: 3px;
 }
 
+/* Conta do Antigravity: chip "vazado" futurista (fundo escuro cósmico, borda e letra na cor da conta) com cantos facetados. */
+.ui-acc-chip[data-provider='antigravity'] {
+  --step: 2px;
+  border-radius: 0;
+  background: #141122;
+  color: var(--acc);
+  box-shadow:
+    inset 0 0 0 var(--step) var(--acc),
+    inset 0 calc(var(--step) * -2) 0 rgba(0, 0, 0, 0.35);
+  clip-path: polygon(
+    var(--step) 0,
+    calc(100% - var(--step)) 0,
+    100% var(--step),
+    100% calc(100% - var(--step)),
+    calc(100% - var(--step)) 100%,
+    var(--step) 100%,
+    0 calc(100% - var(--step)),
+    0 var(--step)
+  );
+}
+
+.ui-acc-chip--lg[data-provider='antigravity'] {
+  --step: 3px;
+}
+
 /* Selo de texto "Codex" ao lado do nome da conta (fonte do sistema: na Pixelify o "C" parece "O"). */
 .ui-prov {
   display: inline-flex;

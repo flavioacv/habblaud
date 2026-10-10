@@ -63,8 +63,11 @@ describe('contas do Antigravity', () => {
     const accounts = detectAntigravityAccounts([d1, d2], { home: h.dir });
     expect(accounts).toHaveLength(2);
     expect(accounts[0].provider).toBe('antigravity');
-    expect(accounts[0].name).toBe('Antigravity A');
+    expect(accounts[0].short).toBe('G');
+    expect(accounts[0].name).toBe('Antigravity G');
+    expect(accounts[0].color).toBe('#a77bf3');
     expect(accounts[1].provider).toBe('antigravity');
+    expect(accounts[1].short).toBe('Y');
     expect(accounts[0].plan).toBe('Subscription');
   });
 

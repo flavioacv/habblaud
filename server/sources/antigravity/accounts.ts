@@ -119,10 +119,20 @@ function matchOverride(overrides: AccountOverride[], id: string, dir: string, ho
   return overrides.find((o) => norm(o.mountDir) === dir) ?? overrides.find((o) => norm(o.configDir) === dir) ?? overrides.find((o) => o.id === id);
 }
 
-function letterCandidates(dir: string): string[] {
-  const suffix = /^\.?(?:antigravity|gemini)[-_.]+([A-Za-z])/i.exec(basename(dir))?.[1]?.toUpperCase();
+export const ANTIGRAVITY_COLOR = '#a77bf3';
+
+function extractSuffixLetter(dirName: string): string | undefined {
+  // Ignora o nome padrão da ferramenta (antigravity, antigravity-cli, gemini, gemini-cli)
+  const stripped = dirName.replace(/^\.?(?:antigravity|gemini)(?:[-_.]cli)?/i, '');
+  if (!stripped) return undefined;
+  const m = /^[-_.]+([A-Za-z])/i.exec(stripped);
+  return m?.[1]?.toUpperCase();
+}
+
+export function letterCandidates(dir: string): string[] {
+  const suffix = extractSuffixLetter(basename(dir));
   const out = suffix ? [suffix] : [];
-  out.push('A', 'G', 'Y', 'V', 'T');
+  out.push('G', 'Y', 'V', 'T', 'A');
   for (let i = 0; i < 26; i++) out.push(String.fromCharCode(65 + i));
   return out;
 }
@@ -151,12 +161,16 @@ export function detectAntigravityAccounts(dirs: string[], opts: AntigravityDetec
   for (const p of partial) if (p.short) usedShorts.add(p.short.toUpperCase());
 
   return partial.map((p) => {
-    const defaultLetter = dirs.length === 1 ? 'A' : (letterCandidates(p.dir).find((l) => !usedShorts.has(l)) ?? 'A');
+    const defaultLetter = letterCandidates(p.dir).find((l) => !usedShorts.has(l)) ?? 'G';
     const short = p.short ?? defaultLetter;
     usedShorts.add(short.toUpperCase());
     let color = str(p.ov?.color);
     if (!color) {
-      color = ACCOUNT_COLORS.find((c) => !usedColors.has(c)) ?? ACCOUNT_COLORS[usedColors.size % ACCOUNT_COLORS.length];
+      if (!usedColors.has(ANTIGRAVITY_COLOR)) {
+        color = ANTIGRAVITY_COLOR;
+      } else {
+        color = ACCOUNT_COLORS.find((c) => !usedColors.has(c)) ?? ACCOUNT_COLORS[usedColors.size % ACCOUNT_COLORS.length];
+      }
       usedColors.add(color);
     }
     const email = str(p.ov?.email) ?? readAntigravityEmail(p.dir, home);

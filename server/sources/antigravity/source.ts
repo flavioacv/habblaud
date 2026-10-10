@@ -136,7 +136,15 @@ export class AntigravitySource implements AgentSource {
   start(): void {
     const env = this.opts.env ?? process.env;
     const home = this.opts.home ?? (env.HOME || homedir());
-    const detected = detectAntigravityAccounts(this.dirs, { home, env });
+    const existing = this.opts.accounts.entries?.() ?? [];
+    const detected = detectAntigravityAccounts(this.dirs, {
+      home,
+      env,
+      taken: {
+        shorts: existing.map((e) => e.detected.short),
+        colors: existing.map((e) => e.detected.color),
+      },
+    });
 
     const entries = this.opts.accounts.setProviderAccounts(
       'antigravity',
