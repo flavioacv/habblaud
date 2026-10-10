@@ -200,6 +200,15 @@ export function codexUsageNote(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'p
     return `Na última leitura (${age}), a conta estava sem cota nem créditos para usar (ex.: os créditos do workspace acabaram). Não é 0%: o Codex não informou as janelas. Os números voltam com a próxima sessão.`;
   return `O Codex só grava o uso enquanto alguma sessão roda: estes números são da última leitura (${age}).`;
 }
+/** Explicação do cartão de uma conta do Antigravity (dica); '' nas outras. */
+export function antigravityUsageNote(a: Pick<AccountInfo, 'usage' | 'usageStatus' | 'provider'>, now: number): string {
+  if (!isAntigravity(a)) return '';
+  const u = a.usage;
+  const state = cardState(a);
+  if (state === 'empty') return 'Não precisa instalar nada: os números de uso do modelo chegam com a próxima sessão do Antigravity.';
+  const age = u ? relativeTime(u.fetchedAt, now) : '';
+  return `O Antigravity atualiza as cotas dos modelos Gemini durante as sessões ativas: estes números refletem a última leitura (${age}).`;
+}
 
 export class UsageCards {
   readonly el: HTMLElement;
@@ -334,7 +343,7 @@ export class UsageCards {
       );
     }
 
-    // Sem números: "sem dados de uso" + "Como ativar" (no Codex, "Como funciona": não há o que instalar). Sem cota:
+    // Sem números: "sem dados de uso" + "Como ativar" (no Codex e Antigravity, "Como funciona": não há o que instalar). Sem cota:
     // a mensagem, sem botão.
     const [msgLong, msgShort] = usageMessage(a);
     setText(r.msgLong, msgLong);
@@ -343,18 +352,29 @@ export class UsageCards {
     setHidden(r.how, state === 'noquota');
     r.msg.classList.toggle('is-noquota', state === 'noquota');
     setTitle(r.msg, state === 'noquota' ? codexUsageNote(a, now) : '');
-    setText(r.howLong, codex ? 'Como funciona' : 'Como ativar');
-    setText(r.howShort, codex ? 'Saber' : 'Ativar');
-    r.how.dataset.help = codex ? 'codex' : 'usage';
-    setTitle(r.how, codex ? 'Como o uso do Codex chega ao Habblaud (abre a ajuda em “Codex”)' : 'Como mostrar o uso desta conta (abre a ajuda em “Contas e uso”)');
+    const isOtherProvider = codex || isAntigravity(a);
+    setText(r.howLong, isOtherProvider ? 'Como funciona' : 'Como ativar');
+    setText(r.howShort, isOtherProvider ? 'Saber' : 'Ativar');
+    r.how.dataset.help = codex ? 'codex' : isAntigravity(a) ? 'antigravity' : 'usage';
+    setTitle(
+      r.how,
+      codex
+        ? 'Como o uso do Codex chega ao Habblaud (abre a ajuda em “Codex”)'
+        : isAntigravity(a)
+        ? 'Como o uso do Antigravity chega ao Habblaud'
+        : 'Como mostrar o uso desta conta (abre a ajuda em “Contas e uso”)',
+    );
     this.updateTip(r, a, state, five, week, now);
   }
 
   private updateTip(r: CardRefs, a: AccountInfo, state: CardState, five: UsageWindowView | null, week: UsageWindowView | null, now: number): void {
     const codex = isCodex(a);
-    setText(r.tipTitle, `${a.name}${codex && !/codex/i.test(a.name) ? ' · Codex' : ''}${a.plan ? ` · plano ${a.plan}` : ''}`);
+    const agy = isAntigravity(a);
+    const provName = codex ? 'Codex' : agy ? 'Antigravity' : '';
+    setText(r.tipTitle, `${a.name}${provName && !new RegExp(provName, 'i').test(a.name) ? ` · ${provName}` : ''}${a.plan ? ` · plano ${a.plan}` : ''}`);
     const rows: [string, string][] = [];
     if (codex) rows.push(['Ferramenta', 'Codex']);
+    if (agy) rows.push(['Ferramenta', 'Antigravity']);
     if (a.email) rows.push(['E-mail', a.email]);
     if (a.organization) rows.push(['Organização', a.organization]);
     if (a.plan) rows.push(['Plano', a.plan]);
@@ -364,22 +384,30 @@ export class UsageCards {
     if (u && (u.fiveHour || u.sevenDay)) {
       rows.push(['Sessão de 5 h', five?.summary ?? '—']);
       rows.push(['Semana', week?.summary ?? '—']);
-      // Opus e Sonnet são janelas do Claude: no Codex não existem.
-      const opus = codex ? null : usageWindowView(u.sevenDayOpus, u.fetchedAt, now, WEEK_MS);
+      // Opus e Sonnet no Claude Code; no Antigravity, representa a cota do grupo Claude/GPT
+      const opus = codex || agy ? null : usageWindowView(u.sevenDayOpus, u.fetchedAt, now, WEEK_MS);
       const sonnet = codex ? null : usageWindowView(u.sevenDaySonnet, u.fetchedAt, now, WEEK_MS);
       if (opus) rows.push(['Opus (semana)', opus.summary]);
-      if (sonnet) rows.push(['Sonnet (semana)', sonnet.summary]);
+      if (sonnet) rows.push([agy ? 'Claude / GPT (semana)' : 'Sonnet (semana)', sonnet.summary]);
     }
     if (u && state === 'noquota') rows.push(['Cota', 'sem cota nem créditos agora']);
-    if (u && (state !== 'empty' || codex)) {
+    if (u && (state !== 'empty' || codex || agy)) {
       rows.push(['Origem', sourceLabel(u)]);
       rows.push(['Atualizado', relativeTime(u.fetchedAt, now)]);
     }
     syncRows(r.tipRows, rows);
 
-    // Codex: a explicação dele, sem o passo a passo do Claude Code (não há o que instalar para o uso).
+    // Codex e Antigravity: explicação específica, sem o passo a passo do Claude Code (não há o que instalar para o uso).
     if (codex) {
       const note = codexUsageNote(a, now);
+      setText(r.tipNote, note);
+      setHidden(r.tipNote, !note);
+      setHidden(r.tipSetup, true);
+      return;
+    }
+
+    if (agy) {
+      const note = antigravityUsageNote(a, now);
       setText(r.tipNote, note);
       setHidden(r.tipNote, !note);
       setHidden(r.tipSetup, true);

@@ -23,6 +23,7 @@ function home() {
     if (withBrain) {
       mkdirSync(join(dir, 'brain'), { recursive: true });
       mkdirSync(join(dir, 'presence'), { recursive: true });
+      writeFileSync(join(dir, 'history.jsonl'), '');
     } else {
       mkdirSync(dir, { recursive: true });
     }
@@ -43,7 +44,8 @@ describe('contas do Antigravity', () => {
   it('descoberta de pastas via ANTIGRAVITY_HOME ou ~/.gemini/antigravity-cli', () => {
     const h = home();
     const defaultDir = join(h.dir, '.gemini', 'antigravity-cli');
-    mkdirSync(join(defaultDir, 'brain'), { recursive: true });
+    mkdirSync(join(defaultDir, 'presence'), { recursive: true });
+    writeFileSync(join(defaultDir, 'history.jsonl'), '');
 
     const found = discoverAntigravityDirs({}, h.dir);
     expect(found).toContain(defaultDir);
@@ -64,5 +66,15 @@ describe('contas do Antigravity', () => {
     expect(accounts[0].name).toBe('Antigravity A');
     expect(accounts[1].provider).toBe('antigravity');
     expect(accounts[0].plan).toBe('Subscription');
+  });
+
+  it('lê e-mail da conta de google_accounts.json', () => {
+    const h = home();
+    const d = h.agy('agy-1', true);
+    mkdirSync(join(h.dir, '.gemini'), { recursive: true });
+    writeFileSync(join(h.dir, '.gemini', 'google_accounts.json'), JSON.stringify({ active: 'test@gmail.com' }));
+
+    const accounts = detectAntigravityAccounts([d], { home: h.dir });
+    expect(accounts[0].email).toBe('test@gmail.com');
   });
 });

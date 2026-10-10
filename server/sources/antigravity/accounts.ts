@@ -4,9 +4,9 @@
 // Descoberta: HABBLAUD_ANTIGRAVITY_DIRS (lista separada por vírgula) substitui tudo; senão ANTIGRAVITY_HOME,
 // GEMINI_CLI_HOME ou `$HOME/.gemini/antigravity-cli*` que tenham cara de pasta do Antigravity (isAntigravityHome).
 // Letra da conta: o alias de shell `alias x='ANTIGRAVITY_HOME=... agy'`; sem alias, letra derivada ("A", "G", "Y"...).
-import { readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   ACCOUNT_COLORS,
   accountIds,
@@ -45,22 +45,43 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
 
+/** Tenta obter o e-mail da conta ativa do Google/Antigravity (ex.: ~/.gemini/google_accounts.json). */
+export function readAntigravityEmail(dir: string, home: string): string | undefined {
+  // Procura em ~/.gemini/google_accounts.json ou no pai de dir se for pasta filha de .gemini
+  const candidates = [
+    join(home, '.gemini', 'google_accounts.json'),
+    join(dirname(dir), 'google_accounts.json'),
+    join(dir, 'google_accounts.json'),
+  ];
+  for (const c of candidates) {
+    if (isFile(c)) {
+      try {
+        const raw = JSON.parse(readFileSync(c, 'utf8'));
+        if (typeof raw?.active === 'string' && raw.active.trim()) {
+          return raw.active.trim();
+        }
+      } catch {
+        // ignora
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Pasta padrão do Antigravity: ANTIGRAVITY_HOME, GEMINI_CLI_HOME ou $HOME/.gemini/antigravity-cli. */
 export function defaultAntigravityHome(env: NodeJS.ProcessEnv = process.env, home: string = env.HOME || homedir()): string {
   const raw = env.ANTIGRAVITY_HOME?.trim() || env.GEMINI_CLI_HOME?.trim();
   return raw ? expandHome(raw, home) : join(home, '.gemini', 'antigravity-cli');
 }
 
-/** Checa se a pasta tem a estrutura do Antigravity (brain, presence, conversations, history.jsonl). */
+/** Checa se a pasta tem a estrutura do Antigravity CLI (presence e history.jsonl). */
 export function isAntigravityHome(p: string): boolean {
-  if (isDir(join(p, 'brain')) || isDir(join(p, 'presence')) || isDir(join(p, 'conversations'))) return true;
-  if (isFile(join(p, 'history.jsonl')) || isFile(join(p, 'settings.json'))) return true;
-  return false;
+  return isDir(join(p, 'presence')) && isFile(join(p, 'history.jsonl'));
 }
 
 /**
  * Pastas do Antigravity observadas. HABBLAUD_ANTIGRAVITY_DIRS substitui a detecção.
- * Senão: pasta padrão e outras pastas candidatas em ~/.gemini/ e ~/.antigravity*.
+ * Senão: pasta padrão (~/.gemini/antigravity-cli) e outras pastas antigravity-cli* em ~/.gemini/.
  */
 export function discoverAntigravityDirs(env: NodeJS.ProcessEnv = process.env, home: string = env.HOME || homedir()): string[] {
   const override = splitList(env.HABBLAUD_ANTIGRAVITY_DIRS);
@@ -73,7 +94,7 @@ export function discoverAntigravityDirs(env: NodeJS.ProcessEnv = process.env, ho
   if (isDir(geminiDir)) {
     try {
       for (const ent of readdirSync(geminiDir, { withFileTypes: true })) {
-        if (!ent.name.startsWith('antigravity')) continue;
+        if (!ent.name.startsWith('antigravity-cli')) continue;
         if (!ent.isDirectory() && !ent.isSymbolicLink()) continue;
         const p = join(geminiDir, ent.name);
         if (isAntigravityHome(p)) found.push(p);
@@ -81,17 +102,6 @@ export function discoverAntigravityDirs(env: NodeJS.ProcessEnv = process.env, ho
     } catch {
       // ignore
     }
-  }
-
-  try {
-    for (const ent of readdirSync(home, { withFileTypes: true })) {
-      if (!ent.name.startsWith('.antigravity')) continue;
-      if (!ent.isDirectory() && !ent.isSymbolicLink()) continue;
-      const p = join(home, ent.name);
-      if (isAntigravityHome(p)) found.push(p);
-    }
-  } catch {
-    // ignore
   }
 
   const dirs = [...new Set(found.map((p) => expandHome(p, home)))];
@@ -141,13 +151,15 @@ export function detectAntigravityAccounts(dirs: string[], opts: AntigravityDetec
   for (const p of partial) if (p.short) usedShorts.add(p.short.toUpperCase());
 
   return partial.map((p) => {
-    const short = p.short ?? letterCandidates(p.dir).find((l) => !usedShorts.has(l)) ?? 'A';
+    const defaultLetter = dirs.length === 1 ? 'A' : (letterCandidates(p.dir).find((l) => !usedShorts.has(l)) ?? 'A');
+    const short = p.short ?? defaultLetter;
     usedShorts.add(short.toUpperCase());
     let color = str(p.ov?.color);
     if (!color) {
       color = ACCOUNT_COLORS.find((c) => !usedColors.has(c)) ?? ACCOUNT_COLORS[usedColors.size % ACCOUNT_COLORS.length];
       usedColors.add(color);
     }
+    const email = str(p.ov?.email) ?? readAntigravityEmail(p.dir, home);
     const acc: DetectedAccount = {
       id: p.id,
       provider: 'antigravity',
@@ -155,6 +167,7 @@ export function detectAntigravityAccounts(dirs: string[], opts: AntigravityDetec
       short,
       name: str(p.ov?.name) ?? (dirs.length > 1 ? `Antigravity ${short}` : 'Antigravity'),
       color,
+      email,
     };
     const plan = str(p.ov?.plan);
     if (plan) acc.plan = plan;

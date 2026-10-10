@@ -167,12 +167,12 @@ export function parseAntigravityLine(rawLine: string, s: AntigravityState, ctx: 
     s.stats.tokensOut += outTokens;
     out.changed = true;
 
-    // Constrói ou atualiza AccountUsage do Antigravity baseado no consumo
+    // Constrói ou atualiza AccountUsage do Antigravity baseado no consumo acumulado do modelo
     const usage: AccountUsage = {
       source: 'antigravity',
       fetchedAt: createdAt,
-      fiveHour: { utilization: Math.min(100, Math.round((s.stats.tokensIn / 1_000_000) * 100)) },
-      sevenDay: { utilization: Math.min(100, Math.round(((s.stats.tokensIn + s.stats.tokensOut) / 5_000_000) * 100)) },
+      fiveHour: { utilization: Math.min(100, Math.round(((inTokens + cacheTokens + outTokens) / 10_000_000) * 100)) },
+      sevenDay: { utilization: Math.min(100, Math.round(((s.stats.tokensIn + s.stats.tokensOut) / 100_000_000) * 100)) },
     };
     s.usage = usage;
     out.signals.push({ type: 'usage', usage });

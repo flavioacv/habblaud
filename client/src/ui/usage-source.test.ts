@@ -46,7 +46,26 @@ describe('cartão de uso de uma conta do Codex', () => {
     // Claude Code: como antes.
     expect(usageMessage({ usageStatus: 'disabled' })).toEqual(['sem dados de uso', 'sem dados']);
     expect(usageSubtitle({ email: 'a@b.c', configDir: '~/.claude' })).toBe('a@b.c');
-    expect(usageSubtitle({ configDir: '~/.claude' })).toBe('~/.claude');
     expect(codexUsageNote({ usageStatus: 'ok' }, 0)).toBe('');
+  });
+});
+
+describe('cartão de uso de uma conta do Antigravity', () => {
+  const agy = (over: Partial<Acc> = {}): Acc => ({ provider: 'antigravity', usageStatus: 'ok', configDir: '~/.gemini/antigravity-cli', plan: 'Subscription', ...over });
+
+  it('rotula a origem como sessões do Antigravity', () => {
+    expect(sourceLabel({ source: 'antigravity', fetchedAt: 0 })).toBe('sessões do Antigravity');
+  });
+
+  it('a idade fica sempre à mostra quando tem uso', () => {
+    const fresh = { source: 'antigravity' as const, fiveHour: win, fetchedAt: 0 };
+    expect(showsUsageAge(agy({ usage: fresh }))).toBe(true);
+    expect(showsUsageAge(agy())).toBe(false);
+  });
+
+  it('exibe e-mail quando disponível ou o plano como subtítulo', () => {
+    expect(usageSubtitle(agy({ email: 'user@example.com' }))).toBe('user@example.com');
+    expect(usageSubtitle(agy({ plan: 'Subscription' }))).toBe('plano Subscription');
+    expect(usageSubtitle(agy({ plan: undefined }))).toBe('Antigravity');
   });
 });

@@ -1,9 +1,10 @@
 // Fonte de agentes do Antigravity (AgentSource 'antigravity', ver sources/source.ts):
 // Observa as sessões ABERTAS em cada pasta do Antigravity (presence/<convId>.lock),
 // acompanha os transcripts em tempo real e alimenta o Office e o AccountsService.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import type { AccountEntry, AccountsService } from '../../accounts/service';
 import { errMsg, log } from '../../log';
 import type { Office, TranscriptSummary } from '../../model/office';
@@ -13,6 +14,7 @@ import type { TerminalParser } from '../terminal';
 import type { AgentStatus, SourceInfo } from '../../../shared/types';
 import { detectAntigravityAccounts } from './accounts';
 import { createAntigravityTerminalParser } from './terminal';
+import { fetchAntigravityUsage } from './quota';
 import {
   createAntigravityState,
   parseAntigravityLine,
@@ -20,7 +22,67 @@ import {
   type AntigravityState,
 } from './transcript';
 
+import { execSync } from 'node:child_process';
+
+const esmRequire = createRequire(import.meta.url);
+
+function getDatabaseSync(): any {
+  try {
+    return esmRequire('node:sqlite').DatabaseSync;
+  } catch {
+    return undefined;
+  }
+}
+
 const MAIN_ROLE = 'Agente principal (Antigravity)';
+const STARTUP_GRACE_MS = 5_000;
+const QUOTA_REFRESH_MS = 60_000;
+
+export interface RunningAntigravityProcess {
+  pid: number;
+  convId: string;
+  cwd?: string;
+}
+
+/** Retorna os processos agy/antigravity rodando na máquina agora com seu CWD, indexados pelo convId. */
+export function runningAntigravityProcesses(): Map<string, RunningAntigravityProcess> {
+  const map = new Map<string, RunningAntigravityProcess>();
+  try {
+    const out = execSync('ps -eo pid,command', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    for (const line of out.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+.*(?:agy|antigravity)\s+.*--conversation=([0-9a-fA-F-]+)/);
+      if (m) {
+        const pid = parseInt(m[1], 10);
+        const convId = m[2];
+        let cwd: string | undefined;
+        try {
+          if (process.platform === 'darwin') {
+            const lsofOut = execSync(`lsof -a -p ${pid} -d cwd -Fn`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+            for (const l of lsofOut.split('\n')) {
+              if (l.startsWith('n/')) {
+                cwd = l.slice(1);
+                break;
+              }
+            }
+          } else if (process.platform === 'linux') {
+            cwd = readlinkSync(`/proc/${pid}/cwd`);
+          }
+        } catch {
+          // ignore
+        }
+        map.set(convId, { pid, convId, cwd });
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return map;
+}
+
+/** Retorna os IDs de conversas que possuem processo agy rodando na máquina agora. */
+export function runningAntigravityConversations(): Set<string> {
+  return new Set(runningAntigravityProcesses().keys());
+}
 
 export interface AntigravitySourceOptions {
   accounts: AccountsService;
@@ -31,6 +93,7 @@ export interface AntigravitySourceOptions {
   now?: () => number;
   pollMs?: number;
   tailBytes?: number;
+  fetchUsage?: () => Promise<import('../../../shared/types').AccountUsage | undefined>;
 }
 
 interface AntigravityAccountTracker {
@@ -59,6 +122,7 @@ export class AntigravitySource implements AgentSource {
   private readonly now: () => number;
   private readonly pollMs: number;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private quotaTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private accounts: AntigravityAccountTracker[] = [];
   private readonly trackers = new Map<string, ConversationTracker>();
@@ -88,6 +152,7 @@ export class AntigravitySource implements AgentSource {
     this.opts.office.beginBoot();
     try {
       this.poll();
+      this.refreshQuota();
     } catch (err) {
       log.error(`Falha no boot da fonte Antigravity: ${errMsg(err)}`);
     } finally {
@@ -97,6 +162,23 @@ export class AntigravitySource implements AgentSource {
     if (!this.stopped) {
       this.timer = setInterval(() => this.poll(), this.pollMs);
       this.timer.unref?.();
+
+      this.quotaTimer = setInterval(() => this.refreshQuota(), QUOTA_REFRESH_MS);
+      this.quotaTimer.unref?.();
+    }
+  }
+
+  /** Atualiza o uso da conta a partir da API oficial ou token salvo no Keychain. */
+  async refreshQuota(): Promise<void> {
+    try {
+      const usage = this.opts.fetchUsage ? await this.opts.fetchUsage() : await fetchAntigravityUsage(undefined, this.now());
+      if (usage) {
+        for (const acc of this.accounts) {
+          this.opts.accounts.setUsage(acc.id, usage);
+        }
+      }
+    } catch (err) {
+      log.warnOnce('antigravity-quota-refresh', `Erro ao atualizar cota do Antigravity: ${errMsg(err)}`);
     }
   }
 
@@ -106,8 +188,9 @@ export class AntigravitySource implements AgentSource {
       clearInterval(this.timer);
       this.timer = null;
     }
-    for (const t of this.trackers.values()) {
-      t.tail?.close();
+    if (this.quotaTimer) {
+      clearInterval(this.quotaTimer);
+      this.quotaTimer = null;
     }
     this.trackers.clear();
   }
@@ -136,27 +219,27 @@ export class AntigravitySource implements AgentSource {
     return createAntigravityTerminalParser();
   }
 
-  /** Lê arquivos de presença (*.lock) e o history.jsonl de cada conta. */
+  /** Lê arquivos de presença (*.lock) e processos em execução. */
   private poll(): void {
     const now = this.now();
+    const running = runningAntigravityProcesses();
     for (const acc of this.accounts) {
-      this.pollAccount(acc, now);
+      this.pollAccount(acc, now, running);
     }
 
-    // Limpa conversas que não têm mais lock há mais de 3 segundos
+    // Limpa conversas que não têm mais processo ativo
     for (const [key, t] of this.trackers.entries()) {
-      if (now - t.lastSeenAt > 3_000) {
+      if (now - t.lastSeenAt >= this.pollMs + 500) {
         if (t.inOffice) {
           this.opts.office.closeMain(key);
           t.inOffice = false;
         }
-        t.tail?.close();
         this.trackers.delete(key);
       }
     }
   }
 
-  private pollAccount(acc: AntigravityAccountTracker, now: number): void {
+  private pollAccount(acc: AntigravityAccountTracker, now: number, running: Map<string, RunningAntigravityProcess>): void {
     const presenceDir = join(acc.dir, 'presence');
     if (!existsSync(presenceDir)) return;
 
@@ -174,10 +257,29 @@ export class AntigravitySource implements AgentSource {
       if (!name.endsWith('.lock')) continue;
       const convId = name.slice(0, -'.lock'.length);
       const key = `${acc.id}:${convId}`;
+      const lockPath = join(presenceDir, name);
+      const transcriptPath = join(acc.dir, 'brain', convId, '.system_generated', 'logs', 'transcript.jsonl');
+
+      // Verifica se a conversa está realmente ativa (processo rodando no SO ou lock recém-criado)
+      const isRunning = running.has(convId);
+      if (!isRunning) {
+        let isStarting = false;
+        try {
+          const lockMtime = statSync(lockPath).mtimeMs;
+          // Se o processo não está rodando, só aceitamos se o lock foi criado há menos de 5 segundos (processo inicializando)
+          isStarting = now - lockMtime < STARTUP_GRACE_MS;
+        } catch {
+          // ignore
+        }
+        if (!isStarting) {
+          // Processo não está rodando no terminal: sessão encerrada ou lock antigo
+          continue;
+        }
+      }
 
       let tracker = this.trackers.get(key);
       if (!tracker) {
-        const cwd = workspaces.get(convId) || acc.dir;
+        const cwd = this.resolveWorkspace(acc, convId, workspaces, running);
         const transcriptPath = join(acc.dir, 'brain', convId, '.system_generated', 'logs', 'transcript.jsonl');
 
         tracker = {
@@ -195,8 +297,11 @@ export class AntigravitySource implements AgentSource {
         this.trackers.set(key, tracker);
       } else {
         tracker.lastSeenAt = now;
-        if (!tracker.cwd && workspaces.has(convId)) {
-          tracker.cwd = workspaces.get(convId);
+        if (!tracker.cwd) {
+          const resolved = this.resolveWorkspace(acc, convId, workspaces, running);
+          if (resolved) {
+            tracker.cwd = resolved;
+          }
         }
       }
 
@@ -278,7 +383,6 @@ export class AntigravitySource implements AgentSource {
       sessionId: t.conversationId,
       cwd: t.cwd,
       role: MAIN_ROLE,
-      title: t.state.title,
       startedAt: t.state.firstAt ?? now,
       status: t.status,
     });
@@ -288,20 +392,79 @@ export class AntigravitySource implements AgentSource {
   private readWorkspaces(acc: AntigravityAccountTracker): Map<string, string> {
     const map = new Map<string, string>();
     const historyFile = join(acc.dir, 'history.jsonl');
-    if (!existsSync(historyFile)) return map;
-
-    try {
-      const content = readFileSync(historyFile, 'utf8');
-      for (const line of content.split('\n')) {
-        if (!line.trim()) continue;
-        const j = JSON.parse(line) as { conversationId?: string; workspace?: string };
-        if (j.conversationId && j.workspace) {
-          map.set(j.conversationId, j.workspace);
+    if (existsSync(historyFile)) {
+      try {
+        const content = readFileSync(historyFile, 'utf8');
+        for (const line of content.split('\n')) {
+          if (!line.trim()) continue;
+          const j = JSON.parse(line) as { conversationId?: string; workspace?: string };
+          if (j.conversationId && j.workspace) {
+            map.set(j.conversationId, j.workspace);
+          }
         }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
     return map;
+  }
+
+  private isInternalDir(acc: AntigravityAccountTracker, path: string): boolean {
+    return path === acc.dir || path.startsWith(acc.dir + '/');
+  }
+
+  private resolveWorkspace(
+    acc: AntigravityAccountTracker,
+    convId: string,
+    workspaces: Map<string, string>,
+    running: Map<string, RunningAntigravityProcess>,
+  ): string | undefined {
+    // 1. Processo ativo no SO: CWD onde o comando agy/antigravity está rodando
+    const proc = running.get(convId);
+    if (proc?.cwd && !this.isInternalDir(acc, proc.cwd)) {
+      return proc.cwd;
+    }
+
+    // 2. Histórico salvo em history.jsonl
+    const fromHistory = workspaces.get(convId);
+    if (fromHistory && !this.isInternalDir(acc, fromHistory)) {
+      return fromHistory;
+    }
+
+    // 3. Metadados da trajetória no SQLite da conversa
+    const fromDb = this.readWorkspaceFromDb(acc, convId);
+    if (fromDb && !this.isInternalDir(acc, fromDb)) {
+      return fromDb;
+    }
+
+    // Nunca usa acc.dir como fallback: aguarda o projeto real ser conhecido
+    return undefined;
+  }
+
+  private readWorkspaceFromDb(acc: AntigravityAccountTracker, convId: string): string | undefined {
+    const dbPath = join(acc.dir, 'conversations', `${convId}.db`);
+    if (!existsSync(dbPath)) return undefined;
+
+    const DatabaseSync = getDatabaseSync();
+    if (!DatabaseSync) return undefined;
+
+    try {
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        const row = db.prepare('SELECT data FROM trajectory_metadata_blob WHERE id = ?').get('main') as { data?: ArrayBuffer | Uint8Array } | undefined;
+        if (row && row.data) {
+          const str = Buffer.from(row.data as Uint8Array).toString('utf8');
+          const m = str.match(/file:\/\/([^\s\x00-\x1f\x7f-\x9f]+)/);
+          if (m) {
+            return decodeURIComponent(m[1]);
+          }
+        }
+      } finally {
+        db.close();
+      }
+    } catch {
+      // Fallback em caso de erro na leitura do SQLite
+    }
+    return undefined;
   }
 }

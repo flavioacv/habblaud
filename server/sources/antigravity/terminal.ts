@@ -2,7 +2,7 @@
 // (prompts, respostas, thinking, tool_calls, saídas de ferramentas).
 import type { TerminalEntry } from '../../../shared/types';
 import { maskSecrets } from '../../../shared/activity';
-import { prepare, RESULT_MAX, RESULT_MAX_LINES, TEXT_MAX, THINKING_MAX, INPUT_MAX, type TerminalParser } from '../terminal';
+import { marked, prepare, RESULT_MAX, RESULT_MAX_LINES, TEXT_MAX, THINKING_MAX, INPUT_MAX, type TerminalParser } from '../terminal';
 
 type Rec = Record<string, unknown>;
 
@@ -61,8 +61,8 @@ export class AntigravityTerminalParser implements TerminalParser {
     if (type === 'USER_INPUT' || source === 'USER_EXPLICIT') {
       const content = str(j.content);
       if (content) {
-        const text = prepare(content, TEXT_MAX);
-        this.emit({ id: `step-${stepIndex}:user`, kind: 'user', text, at });
+        const text = marked(prepare(content, TEXT_MAX));
+        if (text) this.emit({ id: `step-${stepIndex}:user`, kind: 'user', text, at });
       }
       return;
     }
@@ -72,8 +72,8 @@ export class AntigravityTerminalParser implements TerminalParser {
       // Thinking
       const thinking = str(j.thinking);
       if (thinking) {
-        const text = prepare(thinking, THINKING_MAX);
-        this.emit({ id: `step-${stepIndex}:think`, kind: 'thinking', text, at });
+        const text = marked(prepare(thinking, THINKING_MAX));
+        if (text) this.emit({ id: `step-${stepIndex}:think`, kind: 'thinking', text, at });
       }
 
       // Tool calls
@@ -92,7 +92,7 @@ export class AntigravityTerminalParser implements TerminalParser {
           kind: 'tool',
           tool: name,
           title: name,
-          input: input ? prepare(input, INPUT_MAX) : undefined,
+          input: input ? marked(prepare(input, INPUT_MAX)) : undefined,
           at,
         });
       });
@@ -100,8 +100,8 @@ export class AntigravityTerminalParser implements TerminalParser {
       // Texto de resposta
       const content = str(j.content);
       if (content) {
-        const text = prepare(content, TEXT_MAX);
-        this.emit({ id: `step-${stepIndex}:asst`, kind: 'assistant', text, at });
+        const text = marked(prepare(content, TEXT_MAX));
+        if (text) this.emit({ id: `step-${stepIndex}:asst`, kind: 'assistant', text, at });
       }
       return;
     }
@@ -110,12 +110,13 @@ export class AntigravityTerminalParser implements TerminalParser {
     if (type === 'GENERIC') {
       const content = str(j.content) ?? str(j.error) ?? '';
       if (content) {
-        const text = prepare(content, RESULT_MAX);
+        const p = prepare(content, RESULT_MAX, RESULT_MAX_LINES);
         this.emit({
           id: `step-${stepIndex}:res`,
           kind: 'result',
-          tool: 'tool',
-          text,
+          toolUseId: `step-${stepIndex}:tool`,
+          text: p.text || '(sem saída)',
+          truncated: p.truncated,
           error: j.status === 'ERROR' || !!j.error,
           at,
         });
