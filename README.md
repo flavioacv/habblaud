@@ -5,7 +5,7 @@
 <h1 align="center">Habblaud</h1>
 
 <p align="center">
-  <b>O escritório virtual dos seus agentes do Claude Code (e do Codex).</b><br />
+  <b>O escritório virtual dos seus agentes do Claude Code, Codex e Antigravity.</b><br />
   Cada projeto vira uma sala, cada agente vira um personagem em pixel art que mostra, em tempo real, o que está fazendo.
 </p>
 
@@ -13,7 +13,7 @@
   <img alt="Node.js 22.12+" src="https://img.shields.io/badge/node-%E2%89%A522.12-5fa04e?logo=node.js&logoColor=white" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-7-3178c6?logo=typescript&logoColor=white" />
   <img alt="Docker" src="https://img.shields.io/badge/Docker-pronto-2496ed?logo=docker&logoColor=white" />
-  <img alt="Zero dependências de runtime" src="https://img.shields.io/badge/depend%C3%AAncias%20de%20runtime-0-f08a3c" />
+  <img alt="Integração MCP" src="https://img.shields.io/badge/MCP-stdio-f08a3c" />
   <img alt="Interface em português" src="https://img.shields.io/badge/interface-PT--BR-4aa8e8" />
 </p>
 
@@ -42,6 +42,7 @@ para dar a letra de cada conta). Nada sai do computador: o Habblaud não lê cre
 - [Como usar](#como-usar)
 - [Contas e uso (5 horas e semanal)](#contas-e-uso-5-horas-e-semanal)
 - [Configuração](#configuração)
+- [Integração MCP](#integração-mcp)
 - [Como funciona](#como-funciona)
 - [Privacidade e segurança](#privacidade-e-segurança)
 - [Desenvolvimento](#desenvolvimento)
@@ -485,6 +486,9 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
   na fila da sessão e o Codex a pega quando termina o que está fazendo (até uns 10 segundos depois). No modo Node o
   próprio Habblaud roda o comando; **no Docker**, deixe `npm run codex:bridge` rodando no Mac (o container não
   enxerga o seu Codex).
+- Para sessões Antigravity abertas, a mesma caixa envia a mensagem diretamente à conversa pelo `agy agentapi
+  send-message`. O Habblaud procura `agy` no `PATH` ou em `~/.local/bin/agy`; use `HABBLAUD_AGY_BIN` para informar
+  outro caminho. No Docker, esse envio fica indisponível porque o container não acessa o processo local do Antigravity.
 - **Uso de 5 horas e semanal:** vem dos próprios arquivos do Codex e só se renova enquanto alguma sessão roda; o cartão
   mostra a idade dos números e "sem cota" quando o workspace ficou sem créditos.
 - **Quando a sessão entra:** com a primeira mensagem (é quando o Codex grava a pasta do projeto); uma CLI aberta e
@@ -612,6 +616,9 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_CODEX` | ligado | `0` desliga o Codex no escritório. |
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
+| `HABBLAUD_AGY_BIN` | `agy` do PATH ou `~/.local/bin/agy` | Executável do Antigravity para enviar mensagens às conversas abertas (fora do Docker). |
+| `HABBLAUD_AGENT_ID` | — | Identidade do agente no cliente MCP; usada como origem de delegações e identidade ao responder tarefas. |
+| `HABBLAUD_URL` | `http://127.0.0.1:4747` | URL local da API usada pelo servidor MCP (só loopback é aceito). |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (uma consulta às releases do repositório no GitHub a cada 6 h). |
 | `HABBLAUD_ACCOUNTS` | — | JSON para personalizar nome, letra ou cor, casado pelo nome da pasta da conta. Ex.: `[{"id":".claude-conta2","name":"Trabalho","short":"T","color":"#5cc97b"}]`. |
 
@@ -619,6 +626,15 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 `HABBLAUD_MENSAGENS`, `HABBLAUD_CODEX` e `HABBLAUD_UPDATE_CHECK` (no `.env` ou no ambiente) e `HABBLAUD_CLAUDE_DIRS`, `HABBLAUD_CODEX_DIRS`, `HABBLAUD_USAGE_DIR` e
 `HABBLAUD_ACCOUNTS` (lidas pelo `docker:up` no host); as demais ficam fixas dentro do container. Opções: `npm run docker:up -- --no-build` (sobe sem reconstruir),
 `npm run docker:down` (para) e `npm run docker:logs` (acompanha os logs).
+
+## Integração MCP
+
+O servidor MCP local disponibiliza `habblaud_list_agents`, `habblaud_delegate_task`, `habblaud_get_task`,
+`habblaud_complete_task` e `habblaud_fail_task` via stdio. Inicie-o pelo cliente MCP com o comando `npm` e os
+argumentos `--prefix`, o caminho absoluto deste repositório, `run`, `habblaud:mcp`. Configure `HABBLAUD_AGENT_ID`
+no cliente para que as ferramentas reconheçam a sessão sem repetir seu ID; sem essa variável, informe `sourceAgentId`
+ao delegar e `agentId` ao concluir ou falhar. O Habblaud precisa estar rodando localmente. Detalhes em
+[`server/README.md`](server/README.md#servidor-mcp-para-agentes).
 
 ## Como funciona
 

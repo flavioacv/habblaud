@@ -88,6 +88,11 @@ festa) ou 10 min. Push só avisa. O mesmo CI visto de novo em 2 min não repete 
 | `POST /api/permissions/:id/decision` | (página) `PermissionDecision`: `{behavior: 'allow' \| 'deny' \| 'terminal' \| 'answer', message?, interrupt?, suggestion?, answers?}` |
 | `POST /api/messages` | (página) `{agentId, text}`: manda uma mensagem a um agente principal; `201 OutboxMessage`; só com bind local (ver abaixo) |
 | `GET /api/messages/:id` | (página) situação da mensagem (`OutboxMessage`: `queued` \| `sent` \| `delivered` \| `failed`) |
+| `POST /api/tasks` | `{sourceAgentId, targetAgentId, description}`: cria e envia uma tarefa interagente; `201 InterAgentTask` |
+| `GET /api/tasks?status=&agentId=` | lista tarefas, opcionalmente filtradas por estado e agente |
+| `GET /api/tasks/:id` | consulta estado, resultado e eventual erro de notificação |
+| `POST /api/tasks/:id/complete` | `{agentId, result}`: conclui a tarefa (só o agente de destino) e envia o resultado ao solicitante |
+| `POST /api/tasks/:id/fail` | `{agentId, error}`: registra falha (só o agente de destino) e avisa o solicitante |
 | `POST /api/mod/inbox` | (plugin `habblaud-mensagens`) `{session, account?}`: marca a presença da sessão e entrega `{messages: InboxMessage[]}` |
 | `POST /api/mod/inbox/ack` | (plugin) `{session, results: [{id, ok, error?}]}`: confirma cada mensagem entregue (ou a falha) |
 
@@ -284,6 +289,19 @@ snapshot e em `messages` no `/api/health`.
 Qualquer processo local consegue chamar essas rotas (como as de permissão): ligar as mensagens é aceitar que um
 programa da própria máquina possa digitar nas sessões que têm o plugin.
 
+## Tarefas interagentes
+
+`tasks/registry.ts` (`TaskRegistry`) cria tarefas entre agentes principais ativos. A tarefa começa como `pending` e
+passa a `in_progress` quando o `MessageRegistry` confirma que a instrução chegou ao destino. O prompt entregue inclui o
+`taskId` e orienta o destino a chamar `/complete` ou `/fail`; essas rotas exigem que o `agentId` informado corresponda
+ao destino registrado. Conclusão e falha ficam registradas no agente de destino e tentam enviar uma notificação ao
+solicitante. Se a notificação não puder ser entregue, o resultado continua consultável em `GET /api/tasks/:id` e
+`notificationError` descreve o motivo.
+
+Os estados são `pending`, `in_progress`, `completed`, `failed` e `cancelled` (a API atual ainda não expõe cancelamento).
+O registro fica em memória e tarefas encerradas são removidas depois de 24 horas; um reinício do servidor descarta as
+tarefas. As rotas usam a mesma trava local e `HABBLAUD_MENSAGENS` que `/api/messages`.
+
 ## Personagem do projeto
 
 `PUT /api/agents/:id/character` (`http/app.ts`, regras em `Office.setCharacter`) escolhe o nome e a aparência do agente
@@ -353,6 +371,11 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
   do PATH); no Docker, o auxiliar do host (`npm run codex:bridge`) busca em `POST /api/codex/bridge/poll` e confirma em
   `/ack` (mesma trava das mensagens). `canMessage` = há entregador (binário achado, ou auxiliar visto há até 10 s).
   Retorno 0 = entrou na fila da sessão (`delivered`); o Codex consome a fila a cada ~10 s, quando a sessão fica ociosa.
+- Para agentes do Antigravity, o servidor roda `agy agentapi send-message <conversationId> <texto>` diretamente no host.
+  O `conversationId` é o ID de sessão que a fonte do Antigravity já observa. `HABBLAUD_AGY_BIN` define o executável;
+  sem ele, procura `agy` no `PATH` e depois em `~/.local/bin/agy`. `canMessage` só fica ativo fora do Docker quando
+  um executável é encontrado. `delivered` indica que o `agentapi` confirmou a injeção na conversa, não que a tarefa foi
+  concluída pelo agente.
 
 ## Variáveis de ambiente
 
@@ -365,6 +388,7 @@ do Codex levam `provider: 'codex'` (ausente = Claude Code). Ids: `<conta>:<threa
 | `HABBLAUD_CODEX` | ligado | `0` desliga a fonte do Codex |
 | `HABBLAUD_CODEX_DIRS` | — | pastas do Codex separadas por vírgula; substitui a detecção (`CODEX_HOME` e `~/.codex*`) |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH | binário do Codex para o `codex queue` (modo Node e `npm run codex:bridge`) |
+| `HABBLAUD_AGY_BIN` | `agy` do PATH ou `~/.local/bin/agy` | executável do Antigravity para `agy agentapi send-message` (fora do Docker) |
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0`, `false`, `off` ou `no` desligam só as mensagens pelo escritório |
 | `HABBLAUD_CLAUDE_DIRS` | — | config dirs separados por vírgula; substitui a detecção (`~/.claude*` com `projects/` ou `sessions/` + `CLAUDE_CONFIG_DIR`) |
 | `HABBLAUD_DATA_DIR` | `~/.habblaud` (Docker: `/data`) | estado do Habblaud (nomes e personagens dos projetos persistidos em `names.json`, linha do tempo em `timeline/`, estatísticas do Meu dia em `stats/`, última verificação de versão em `updates.json`) |
@@ -425,6 +449,30 @@ O repositório é também um marketplace de plugins do Claude Code (`.claude-plu
 - `permissions/` — responder pelo escritório (permissões e perguntas): registro dos pedidos (`registry.ts`), rotas (`http.ts`) e a busca da chamada no transcript (`transcript.ts`).
 - `messages/` — mensagens pelo escritório: fila, presença das sessões e prazos (`registry.ts`) e rotas (`http.ts`).
 - `updates/` — verificação de versão nova nas releases do GitHub (`checker.ts`).
+- `../scripts/habblaud-mcp.ts` — servidor MCP stdio que expõe agentes e tarefas para os clientes locais.
+
+## Servidor MCP para agentes
+
+`npm run habblaud:mcp` inicia o servidor MCP oficial por stdio. O processo deve ser iniciado pelo cliente MCP e
+mantém `stdout` reservado ao protocolo; a API do Habblaud continua rodando separadamente. Por padrão, a API é
+`http://127.0.0.1:4747`; defina `HABBLAUD_URL` para outro endereço local. Endereços que não sejam localhost são
+recusados.
+
+Configure o cliente MCP para executar `npm` com os argumentos `--prefix`, o caminho absoluto deste repositório,
+`run` e `habblaud:mcp`. A variável opcional `HABBLAUD_AGENT_ID` identifica a sessão do agente: quando definida,
+ela é usada como origem ao delegar e como identidade ao concluir/falhar tarefas. Sem ela, informe `sourceAgentId`
+na delegação e `agentId` ao responder.
+
+Ferramentas disponíveis:
+
+- `habblaud_list_agents`: agentes ativos, provedor, papel, estado e capacidade de receber mensagens;
+- `habblaud_delegate_task`: cria tarefa com `targetAgentId` e `description` (a origem vem do argumento ou ambiente);
+- `habblaud_get_task`: consulta estado e resultado pelo `taskId`;
+- `habblaud_complete_task`: entrega `result` ao solicitante com `taskId` e identidade do agente de destino;
+- `habblaud_fail_task`: registra `error` com `taskId` e identidade do agente de destino.
+
+O `agentId` enviado na conclusão é uma verificação lógica da API local, não uma credencial criptográfica. Mantenha
+o processo MCP e a API no mesmo ambiente local confiável.
 
 Testes: `npx vitest run server shared` (fixtures sintéticas em `server/test/fixtures.ts`; os scripts do host —
 tap de statusline, hook de permissão (rodado como processo contra um servidor de teste), instaladores e

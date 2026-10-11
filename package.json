@@ -40,6 +40,7 @@
     "codex:uninstall": "tsx scripts/codex-install.ts uninstall",
     "codex:status": "tsx scripts/codex-install.ts status",
     "codex:bridge": "tsx scripts/codex-bridge.ts",
+    "habblaud:mcp": "tsx scripts/habblaud-mcp.ts",
     "antigravity:install": "tsx scripts/antigravity-install.ts install",
     "antigravity:uninstall": "tsx scripts/antigravity-install.ts uninstall",
     "antigravity:status": "tsx scripts/antigravity-install.ts status",
@@ -54,5 +55,9 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.3",
     "vitest": "^5.0.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.3.1",
+    "zod": "^4.6.5"
   }
 }

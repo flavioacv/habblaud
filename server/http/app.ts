@@ -43,6 +43,8 @@ export interface ApiDeps {
    * terminal e HABBLAUD_MENSAGENS); a trava do Host local é conferida aqui antes de chamá-las.
    */
   messages?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
+  /** Rotas de tarefas interagentes (/api/tasks/*); seguem a mesma trava local e HABBLAUD_MENSAGENS. */
+  tasks?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
   /**
    * Fonte do Codex ao vivo: recebe os eventos dos hooks do Codex (POST /api/codex/events, server/codex/http.ts). Sem
    * ela a rota responde {ok: false}. Só com Host local e, fora do Docker, conexão pelo loopback (os eventos só observam:
@@ -84,6 +86,10 @@ function isMessagesPath(path: string): boolean {
     path === '/api/codex/bridge/poll' ||
     path === '/api/codex/bridge/ack'
   );
+}
+
+function isTasksPath(path: string): boolean {
+  return path === '/api/tasks' || path.startsWith('/api/tasks/');
 }
 
 const MAX_BODY = 256 * 1024;
@@ -351,6 +357,18 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
         sendJson(res, 403, { error: 'mensagens só são mandadas pelo próprio computador (http://localhost ou http://127.0.0.1)' });
       } else {
         deps.messages(req, res, path);
+      }
+      return true;
+    }
+    if (isTasksPath(path)) {
+      if (!deps.tasks || !deps.messages) {
+        sendJson(res, 403, {
+          error: 'tarefas interagentes desligadas: precisam das mensagens habilitadas e do Habblaud acessível apenas pelo próprio computador',
+        });
+      } else if (!isLoopbackHost(req.headers.host)) {
+        sendJson(res, 403, { error: 'tarefas só são acessadas pelo próprio computador (http://localhost ou http://127.0.0.1)' });
+      } else {
+        deps.tasks(req, res, path);
       }
       return true;
     }

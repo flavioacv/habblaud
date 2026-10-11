@@ -25,9 +25,12 @@ import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
 import { PermissionRegistry } from './permissions/registry';
 import { codexAccountOf } from './codex/http';
+import { createAntigravityMessageRunner, findAntigravityBin } from './messages/antigravity';
 import { createCodexQueueRunner, findCodexBin } from './messages/codex';
 import { createMessageRoutes } from './messages/http';
 import { MessageRegistry } from './messages/registry';
+import { createTaskRoutes } from './tasks/http';
+import { TaskRegistry } from './tasks/registry';
 import type { CodexLive } from './sources/codex/live';
 import { ClaudeWatcher } from './sources/watcher';
 import { discoverCodexDirs } from './sources/codex/accounts';
@@ -140,11 +143,10 @@ const permissions = config.terminal
     })
   : undefined;
 late.permissions = permissions;
-// Mensagens pelo escritório (plugin habblaud-mensagens): entram na sessão como se você as tivesse digitado, então
-// seguem a mesma trava (e HABBLAUD_MENSAGENS=0 desliga só elas). Ao Codex vão por `codex queue` (messages/codex.ts):
-// fora do Docker o próprio servidor roda o comando (HABBLAUD_CODEX_BIN ou `codex` do PATH); no Docker, o auxiliar do
-// host (npm run codex:bridge).
+// Mensagens pelo escritório: Claude via plugin habblaud-mensagens, Codex via `codex queue`, Antigravity via
+// `agy agentapi send-message`. Seguem a mesma trava (e HABBLAUD_MENSAGENS=0 desliga todas).
 const codexBin = config.messages && !config.inDocker ? findCodexBin(process.env) : undefined;
+const antigravityBin = config.messages && !config.inDocker ? findAntigravityBin(process.env) : undefined;
 const messages = config.messages
   ? new MessageRegistry({
       office,
@@ -154,9 +156,11 @@ const messages = config.messages
         run: codexBin ? createCodexQueueRunner(codexBin) : undefined,
         homeOf: (account) => accounts.entriesOf('codex').find((e) => e.id === account)?.detected.configDir,
       },
+      antigravity: antigravityBin ? { run: createAntigravityMessageRunner(antigravityBin) } : undefined,
     })
   : undefined;
 late.messages = messages;
+const tasks = messages ? new TaskRegistry({ office, messages }) : undefined;
 
 if (config.demo) office.setDemo(true);
 // As fontes síncronas (a do Claude Code) terminam o boot aqui, antes de o hub começar a transmitir.
@@ -169,6 +173,7 @@ if (timeline) {
 }
 permissions?.start();
 messages?.start();
+tasks?.start();
 stats.start();
 updates.start();
 const ticker = setInterval(() => {
@@ -199,6 +204,7 @@ const api = createApiHandler({
   timeline: createTimelineHandler({ dir: timelineDir, recording: !!timeline }),
   permissions: permissions ? createPermissionRoutes(permissions) : undefined,
   messages: messages ? createMessageRoutes(messages) : undefined,
+  tasks: tasks ? createTaskRoutes(tasks) : undefined,
   codexLive,
   stats,
   updates,
@@ -294,6 +300,11 @@ server.listen(config.port, config.host, () => {
           ? '   Mensagens ao Codex: pelo auxiliar do host (deixe npm run codex:bridge rodando no Mac).'
           : '   Mensagens ao Codex: sem o binário do Codex (codex no PATH ou HABBLAUD_CODEX_BIN); o auxiliar npm run codex:bridge também serve.',
     );
+    log.info(
+      antigravityBin
+        ? `   Mensagens ao Antigravity: pelo agy agentapi (${antigravityBin}).`
+        : '   Mensagens ao Antigravity: indisponíveis (configure HABBLAUD_AGY_BIN ou inclua agy no PATH fora do Docker).',
+    );
   }
   log.info(
     updates.enabled
@@ -316,6 +327,7 @@ function shutdown(signal: string): void {
   timeline?.stop();
   permissions?.stop();
   messages?.stop();
+  tasks?.stop();
   updates.stop();
   names.flush();
   void closeVite?.();
