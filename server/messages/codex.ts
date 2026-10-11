@@ -31,7 +31,7 @@ export interface CodexQueueJob {
   resume?: boolean;
 }
 
-export type CodexQueueResult = { ok: true } | { ok: false; error: string };
+export type CodexQueueResult = { ok: true; queued?: boolean } | { ok: false; error: string };
 export type CodexQueueRunner = (job: CodexQueueJob) => Promise<CodexQueueResult>;
 
 function canExecute(p: string): boolean {
@@ -81,6 +81,16 @@ export function firstLine(s: string | undefined): string | undefined {
   return line.length > ERROR_MAX ? `${line.slice(0, ERROR_MAX - 1)}…` : line;
 }
 
+function queueAfterWriterConflict(bin: string, thread: string, text: string, env: NodeJS.ProcessEnv, done: (result: CodexQueueResult) => void): void {
+  execFile(bin, queueArgs(thread, text), { env, timeout: QUEUE_TIMEOUT_MS, maxBuffer: 256 * 1024, windowsHide: true, encoding: 'utf8' }, (err, _stdout, stderr) => {
+    if (!err) return done({ ok: true, queued: true });
+    const e = err as NodeJS.ErrnoException & { killed?: boolean };
+    if (e.killed) return done({ ok: false, error: `a fila do Codex não respondeu em ${Math.round(QUEUE_TIMEOUT_MS / 1_000)} s` });
+    if (e.code === 'ENOENT' || e.code === 'EACCES') return done({ ok: false, error: `não consegui rodar o Codex (${bin})` });
+    done({ ok: false, error: firstLine(stderr) ?? `codex queue falhou após conflito de escritor (código ${String(e.code ?? '?')})` });
+  });
+}
+
 /** Roda `codex queue` com o binário dado. Nunca rejeita: falha vira `{ok: false, error}`. */
 export function createCodexQueueRunner(bin: string, opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): CodexQueueRunner {
   const timeoutMs = opts.timeoutMs ?? QUEUE_TIMEOUT_MS;
@@ -115,7 +125,13 @@ export function createCodexQueueRunner(bin: string, opts: { env?: NodeJS.Process
             finish({ ok: false, error: err.code === 'ENOENT' || err.code === 'EACCES' ? `não consegui rodar o Codex (${bin})` : err.message });
           });
           spawned.once('close', (code) => {
-            finish(code === 0 ? { ok: true } : { ok: false, error: firstLine(stderr) ?? `codex exec resume falhou (código ${String(code ?? '?')})` });
+            if (code === 0) return finish({ ok: true });
+            // Uma sessão interativa interrompida pode continuar com o thread carregado e manter o writer lock.
+            // Nesse caso exec resume não chega a iniciar o turno; use a fila oficial, sem tocar no lock do Codex.
+            if (/thread-store conflict|already has an active writer|failed to initialize thread persistence/i.test(stderr)) {
+              return queueAfterWriterConflict(bin, job.thread, job.text, env, finish);
+            }
+            finish({ ok: false, error: firstLine(stderr) ?? `codex exec resume falhou (código ${String(code ?? '?')})` });
           });
         } catch {
           finish({ ok: false, error: 'a mensagem tem caracteres que não dá para mandar ao Codex' });

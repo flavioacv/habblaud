@@ -1,12 +1,13 @@
 // Mensagens a sessões Antigravity pelo `agy agentapi send-message`.
 // O executável injeta o conteúdo na conversa pelo conversationId; sem shell e com prazo limitado.
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 
 /** Prazo do `agy agentapi send-message`. */
 export const SEND_TIMEOUT_MS = 20_000;
+export const RESUME_TIMEOUT_MS = 30 * 60_000;
 const ERROR_MAX = 300;
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -15,6 +16,10 @@ export interface AntigravityMessageJob {
   conversationId: string;
   /** Texto que será injetado na conversa. */
   text: string;
+  /** Inicia um turno headless na mesma conversa ociosa. */
+  resume?: boolean;
+  cwd?: string;
+  antigravityHome?: string;
 }
 
 export type AntigravityMessageResult = { ok: true } | { ok: false; error: string };
@@ -59,6 +64,65 @@ export function createAntigravityMessageRunner(
         return done({ ok: false, error: 'id de conversa do Antigravity inválido' });
       }
       const env = { ...(opts.env ?? process.env) };
+      if (job.resume) {
+        if (!job.cwd || !isAbsolute(job.cwd) || (job.antigravityHome && !isAbsolute(job.antigravityHome))) {
+          return done({ ok: false, error: 'pasta do projeto ou da conta do Antigravity inválida' });
+        }
+        if (job.text.includes('\0')) return done({ ok: false, error: 'a mensagem contém caracteres inválidos para o Antigravity' });
+        if (job.antigravityHome) env.ANTIGRAVITY_HOME = job.antigravityHome;
+        let child: ReturnType<typeof spawn> | undefined;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let stdout = '';
+        let stderr = '';
+        let settled = false;
+        const finish = (result: AntigravityMessageResult) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          done(result);
+        };
+        try {
+          child = spawn(bin, ['--print-timeout', '30m', '--output-format', 'json', '--conversation', job.conversationId, '--print', job.text], {
+            cwd: job.cwd,
+            env,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+          });
+          timer = setTimeout(() => {
+            child?.kill('SIGTERM');
+            finish({ ok: false, error: 'a retomada do Antigravity passou de 30 min' });
+          }, RESUME_TIMEOUT_MS);
+          timer.unref?.();
+          child.stdout?.on('data', (chunk: Buffer) => {
+            if (stdout.length < 1_000_000) stdout += chunk.toString('utf8').slice(0, 1_000_000 - stdout.length);
+          });
+          child.stderr?.on('data', (chunk: Buffer) => {
+            if (stderr.length < 16_000) stderr += chunk.toString('utf8').slice(0, 16_000 - stderr.length);
+          });
+          child.once('error', (err: NodeJS.ErrnoException) => {
+            finish({ ok: false, error: err.code === 'ENOENT' || err.code === 'EACCES' ? `não consegui rodar o Antigravity (${bin})` : err.message });
+          });
+          child.once('close', (code) => {
+            if (code !== 0) return finish({ ok: false, error: firstLine(stderr) ?? `agy --print falhou (código ${String(code ?? '?')})` });
+            let result: unknown;
+            try {
+              result = JSON.parse(stdout);
+            } catch {
+              return finish({ ok: false, error: 'o agy --print retornou uma resposta inválida' });
+            }
+            const response = result && typeof result === 'object' ? result as { conversation_id?: unknown; status?: unknown; error?: unknown } : undefined;
+            if (response?.conversation_id !== job.conversationId) return finish({ ok: false, error: 'o Antigravity retomou uma conversa diferente da solicitada' });
+            const status = typeof response.status === 'string' ? response.status.toUpperCase() : '';
+            if (status && !['SUCCESS', 'COMPLETED'].includes(status)) {
+              return finish({ ok: false, error: firstLine(typeof response.error === 'string' ? response.error : stderr) ?? `a retomada do Antigravity terminou com estado ${status}` });
+            }
+            finish({ ok: true });
+          });
+        } catch {
+          finish({ ok: false, error: 'não consegui iniciar a retomada do Antigravity' });
+        }
+        return;
+      }
       try {
         execFile(
           bin,

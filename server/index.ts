@@ -26,6 +26,7 @@ import { createPermissionRoutes } from './permissions/http';
 import { PermissionRegistry } from './permissions/registry';
 import { codexAccountOf } from './codex/http';
 import { createAntigravityMessageRunner, findAntigravityBin } from './messages/antigravity';
+import { createClaudeResumeRunner, findClaudeBin } from './messages/claude';
 import { createCodexQueueRunner, findCodexBin } from './messages/codex';
 import { createMessageRoutes } from './messages/http';
 import { MessageRegistry } from './messages/registry';
@@ -143,10 +144,11 @@ const permissions = config.terminal
     })
   : undefined;
 late.permissions = permissions;
-// Mensagens pelo escritório: Claude via plugin habblaud-mensagens, Codex via `codex queue`, Antigravity via
-// `agy agentapi send-message`. Seguem a mesma trava (e HABBLAUD_MENSAGENS=0 desliga todas).
+// Mensagens pelo escritório: Claude pelo plugin ou retomada headless, Codex via `codex queue`/resume, Antigravity via
+// agentapi ou retomada headless. Seguem a mesma trava (e HABBLAUD_MENSAGENS=0 desliga todas).
 const codexBin = config.messages && !config.inDocker ? findCodexBin(process.env) : undefined;
 const antigravityBin = config.messages && !config.inDocker ? findAntigravityBin(process.env) : undefined;
+const claudeBin = config.messages && !config.inDocker ? findClaudeBin(process.env) : undefined;
 const messages = config.messages
   ? new MessageRegistry({
       office,
@@ -156,7 +158,14 @@ const messages = config.messages
         run: codexBin ? createCodexQueueRunner(codexBin) : undefined,
         homeOf: (account) => accounts.entriesOf('codex').find((e) => e.id === account)?.detected.configDir,
       },
-      antigravity: antigravityBin ? { run: createAntigravityMessageRunner(antigravityBin) } : undefined,
+      claude: {
+        run: claudeBin ? createClaudeResumeRunner(claudeBin) : undefined,
+        configDirOf: (account) => accounts.entriesOf('claude').find((e) => e.id === account)?.detected.configDir,
+      },
+      antigravity: antigravityBin ? {
+        run: createAntigravityMessageRunner(antigravityBin),
+        homeOf: (account) => accounts.entriesOf('antigravity').find((e) => e.id === account)?.detected.configDir,
+      } : undefined,
     })
   : undefined;
 late.messages = messages;

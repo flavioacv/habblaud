@@ -87,18 +87,19 @@ export const DELIVERED_SHOW_MS = 12_000;
 export function sendStatusText(s: SendState | undefined, now: number, provider: Provider = 'claude'): string {
   if (!s) return '';
   const codex = provider === 'codex';
+  const providerName = provider === 'codex' ? 'Codex' : provider === 'antigravity' ? 'Antigravity' : 'Claude Code';
   switch (s.phase) {
     case 'sending':
       return 'Enviando…';
     case 'queued':
       return codex ? 'Na fila: entregando ao Codex…' : 'Na fila: esperando a sessão buscar a mensagem…';
     case 'sent':
-      return s.resumed ? 'Retomando a conversa no Codex…' : 'Entregando à sessão…';
+      return s.resumed ? `Retomando a conversa no ${providerName}…` : 'Entregando à sessão…';
     case 'delivered':
       // Entregue = entrou na sessão ou na fila dela. Para o Codex o estado `resumed` indica que um novo turno foi
       // executado até o fim, em vez de apenas aceito na fila.
       if (now - s.at >= DELIVERED_SHOW_MS) return '';
-      if (s.resumed) return 'Turno do Codex concluído ✓';
+      if (s.resumed) return `Turno do ${providerName} concluído ✓`;
       return codex
         ? 'Entregue ✓ na fila da sessão: entra quando o Codex terminar o que está fazendo (até ~10 s)'
         : 'Entregue ✓ (se o agente estiver ocupado, entra quando ele terminar)';

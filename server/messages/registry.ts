@@ -22,6 +22,9 @@ import { describeMessage, MESSAGE_MAX } from '../../shared/messages';
 import type { Activity, AgentInfo, InboxMessage, OutboxMessage } from '../../shared/types';
 import { errMsg, log } from '../log';
 import type { AntigravityMessageResult, AntigravityMessageRunner } from './antigravity';
+import { RESUME_TIMEOUT_MS as ANTIGRAVITY_RESUME_TIMEOUT_MS } from './antigravity';
+import type { ClaudeResumeResult, ClaudeResumeRunner } from './claude';
+import { CLAUDE_RESUME_TIMEOUT_MS } from './claude';
 import { RESUME_TIMEOUT_MS, type CodexQueueResult, type CodexQueueRunner } from './codex';
 
 /** Sessão que perguntou pela caixa de entrada há até este tempo: recebe mensagens (canMessage). */
@@ -54,6 +57,7 @@ export const ERR_CODEX_REFUSED = 'o codex queue não aceitou a mensagem';
 export const ERR_ANTIGRAVITY_UNAVAILABLE = 'não há como entregar ao Antigravity agora: configure HABBLAUD_AGY_BIN ou inclua `agy` no PATH';
 export const ERR_ANTIGRAVITY_NOT_CONFIRMED = 'o agy agentapi não confirmou a entrega';
 export const ERR_ANTIGRAVITY_REFUSED = 'o agy agentapi não aceitou a mensagem';
+export const ERR_CLAUDE_UNAVAILABLE = 'não há como retomar o Claude Code agora: configure HABBLAUD_CLAUDE_BIN ou inclua claude no PATH';
 
 const ERROR_MAX = 300;
 const ID_MAX = 300;
@@ -63,6 +67,7 @@ const ACK_MAX = 50;
 export interface OfficeLike {
   get(id: string): AgentInfo | undefined;
   list(): AgentInfo[];
+  roomPath?(roomId: string): string | undefined;
   markDirty(): void;
   addActivity(id: string, activity: Activity, current: boolean): void;
 }
@@ -78,6 +83,12 @@ export interface CodexDeliveryOptions {
 /** Entregador de mensagens ao Antigravity CLI (`agy agentapi send-message`). */
 export interface AntigravityDeliveryOptions {
   run: AntigravityMessageRunner;
+  homeOf?: (account: string) => string | undefined;
+}
+
+export interface ClaudeDeliveryOptions {
+  run?: ClaudeResumeRunner;
+  configDirOf: (account: string) => string | undefined;
 }
 
 export interface MessageRegistryOptions {
@@ -88,6 +99,8 @@ export interface MessageRegistryOptions {
   demoDeliver?: (agentId: string, text: string) => boolean;
   /** Mensagens aos agentes do Codex; ausente = eles não recebem. */
   codex?: CodexDeliveryOptions;
+  /** Retomada headless de sessões ociosas do Claude Code; sessões interativas usam o plugin. */
+  claude?: ClaudeDeliveryOptions;
   /** Mensagens aos agentes do Antigravity; ausente = eles não recebem. */
   antigravity?: AntigravityDeliveryOptions;
   now?: () => number;
@@ -129,6 +142,8 @@ interface Entry {
   sentAt?: number;
   /** Mensagem a um agente do demo: nunca sai pela caixa de entrada. */
   demo?: boolean;
+  /** Retomada headless a uma sessão ociosa do Claude Code. */
+  claude?: true;
   /** Mensagem a um agente do Codex: sai pelo entregador do Codex ('node' = o servidor rodou; 'bridge' = o auxiliar). */
   codex?: true;
   /** Mensagem a um agente Antigravity, enviada pelo runner `agy agentapi`. */
@@ -166,6 +181,7 @@ function unavailableReason(a: AgentInfo, reachable: boolean): string | undefined
   if (!reachable) {
     if (a.provider === 'codex') return ERR_CODEX_UNAVAILABLE;
     if (a.provider === 'antigravity') return ERR_ANTIGRAVITY_UNAVAILABLE;
+    if ((a.provider === undefined || a.provider === 'claude') && a.status === 'idle') return ERR_CLAUDE_UNAVAILABLE;
     return 'a sessão não está com o plugin habblaud-mensagens conectado (npm run mod:install)';
   }
   return undefined;
@@ -242,14 +258,15 @@ export class MessageRegistry {
   }
 
   /**
-   * Agentes principais presentes que recebem mensagens agora: Claude Code com plugin conectado, Codex com entregador e
-   * Antigravity com `agy agentapi` disponível. É o que o Office põe no snapshot.
+ * Agentes principais presentes que recebem mensagens agora: Claude Code com plugin ou retomada headless, Codex com
+ * entregador e Antigravity com `agy` disponível. É o que o Office põe no snapshot.
    */
   reachable(): Set<string> {
     const out = new Set<string>();
     for (const id of this.seen.keys()) if (this.canMessage(id)) out.add(id);
     if (this.codexAvailable()) for (const a of this.opts.office.list()) if (a.provider === 'codex' && a.kind === 'main' && present(a)) out.add(a.id);
     if (this.antigravityAvailable()) for (const a of this.opts.office.list()) if (a.provider === 'antigravity' && a.kind === 'main' && present(a)) out.add(a.id);
+    if (this.opts.claude?.run) for (const a of this.opts.office.list()) if ((a.provider === undefined || a.provider === 'claude') && this.canMessage(a.id)) out.add(a.id);
     return out;
   }
 
@@ -258,8 +275,8 @@ export class MessageRegistry {
     if (a?.provider === 'codex') return this.codexAvailable() && present(a) && a.kind === 'main';
     if (a?.provider === 'antigravity') return this.antigravityAvailable() && present(a) && a.kind === 'main';
     const at = this.seen.get(agentId);
-    if (at === undefined || this.now() - at >= this.presenceMs) return false;
-    return present(a) && a.kind === 'main';
+    if (at !== undefined && this.now() - at < this.presenceMs) return present(a) && a.kind === 'main';
+    return !!this.opts.claude?.run && !!a && a.status === 'idle' && present(a) && a.kind === 'main' && !!this.opts.claude.configDirOf(a.account);
   }
 
   /** Há como entregar ao Codex: o binário no modo Node ou o auxiliar do host visto há pouco. */
@@ -296,9 +313,11 @@ export class MessageRegistry {
     if (demo) entry.demo = true;
     else if (real?.provider === 'codex') entry.codex = true;
     else if (real?.provider === 'antigravity') entry.antigravity = true;
+    else if (real && (real.provider === undefined || real.provider === 'claude') && !this.pluginRecent(real.id, now)) entry.claude = true;
     this.messages.set(id, entry);
     const out = { ...entry.msg };
     if (entry.codex) this.pumpCodex();
+    if (entry.claude) this.pumpClaude();
     if (entry.antigravity) this.pumpAntigravity();
     return { message: out };
   }
@@ -333,7 +352,7 @@ export class MessageRegistry {
     const out: InboxMessage[] = [];
     for (const e of this.messages.values()) {
       if (out.length >= INBOX_BATCH) break;
-      if (e.demo || e.codex || e.antigravity || e.msg.agentId !== agent.id || e.msg.status !== 'queued') continue;
+      if (e.demo || e.claude || e.codex || e.antigravity || e.msg.agentId !== agent.id || e.msg.status !== 'queued') continue;
       this.setStatus(e, 'sent', now);
       e.session = session;
       e.sentAt = now;
@@ -354,7 +373,7 @@ export class MessageRegistry {
     const now = this.now();
     for (const x of ackResults(r)) {
       const e = this.messages.get(x.id);
-      if (!e || e.demo || e.codex || e.antigravity || e.session !== session) continue;
+      if (!e || e.demo || e.claude || e.codex || e.antigravity || e.session !== session) continue;
       if (e.msg.status !== 'sent' && !(e.msg.status === 'failed' && e.late)) continue;
       if (x.ok) this.finish(e, 'delivered', now);
       else this.fail(e, now, x.error ?? ERR_REFUSED);
@@ -439,9 +458,9 @@ export class MessageRegistry {
       }
       if (!present(this.opts.office.get(e.msg.agentId))) this.fail(e, now, ERR_GONE);
       else if (e.msg.status === 'queued' && now - e.msg.createdAt >= this.queuedTimeoutMs) {
-        this.fail(e, now, e.antigravity ? ERR_ANTIGRAVITY_UNAVAILABLE : !e.codex ? ERR_NOT_FETCHED : this.opts.codex?.run ? ERR_CODEX_SLOW : ERR_CODEX_NOT_FETCHED);
-      } else if (e.msg.status === 'sent' && now - (e.sentAt ?? now) >= (e.resume ? RESUME_TIMEOUT_MS + 5_000 : this.sentTimeoutMs)) {
-        this.fail(e, now, e.antigravity ? ERR_ANTIGRAVITY_NOT_CONFIRMED : e.codex ? ERR_CODEX_NOT_CONFIRMED : ERR_NOT_CONFIRMED);
+        this.fail(e, now, e.claude ? ERR_CLAUDE_UNAVAILABLE : e.antigravity ? ERR_ANTIGRAVITY_UNAVAILABLE : !e.codex ? ERR_NOT_FETCHED : this.opts.codex?.run ? ERR_CODEX_SLOW : ERR_CODEX_NOT_FETCHED);
+      } else if (e.msg.status === 'sent' && now - (e.sentAt ?? now) >= (e.resume ? Math.max(RESUME_TIMEOUT_MS, CLAUDE_RESUME_TIMEOUT_MS, ANTIGRAVITY_RESUME_TIMEOUT_MS) + 5_000 : this.sentTimeoutMs)) {
+        this.fail(e, now, e.claude ? ERR_CLAUDE_UNAVAILABLE : e.antigravity ? ERR_ANTIGRAVITY_NOT_CONFIRMED : e.codex ? ERR_CODEX_NOT_CONFIRMED : ERR_NOT_CONFIRMED);
         e.late = true;
       }
     }
@@ -457,6 +476,7 @@ export class MessageRegistry {
       if (!this.opts.codex?.run) this.opts.office.markDirty();
     }
     this.pumpCodex();
+    this.pumpClaude();
     this.pumpAntigravity();
   }
 
@@ -464,6 +484,52 @@ export class MessageRegistry {
 
   private bridgeRecent(): boolean {
     return this.bridgeAt !== undefined && this.now() - this.bridgeAt < this.presenceMs;
+  }
+
+  private pluginRecent(agentId: string, now = this.now()): boolean {
+    const at = this.seen.get(agentId);
+    return at !== undefined && now - at < this.presenceMs;
+  }
+
+  /** Retoma uma sessão Claude ociosa sem plugin, uma mensagem por vez e na ordem da fila. */
+  private pumpClaude(): void {
+    const run = this.opts.claude?.run;
+    if (!run) return;
+    const busy = new Set<string>();
+    for (const e of this.messages.values()) if (e.claude && e.msg.status === 'sent') busy.add(e.msg.agentId);
+    const now = this.now();
+    for (const e of this.messages.values()) {
+      if (!e.claude || e.msg.status !== 'queued' || busy.has(e.msg.agentId)) continue;
+      const agent = this.opts.office.get(e.msg.agentId);
+      if (!present(agent)) {
+        this.fail(e, now, ERR_GONE);
+        continue;
+      }
+      const configDir = this.opts.claude?.configDirOf(agent.account);
+      const cwd = this.opts.office.roomPath?.(agent.roomId);
+      if (!configDir || !cwd) {
+        this.fail(e, now, ERR_CLAUDE_UNAVAILABLE);
+        continue;
+      }
+      busy.add(agent.id);
+      this.setStatus(e, 'sent', now);
+      e.sentAt = now;
+      e.resume = true;
+      e.msg.resumed = true;
+      run({ configDir, cwd, session: agent.sessionId, text: e.text }).then(
+        (r) => this.claudeDone(e, r),
+        (err: unknown) => this.claudeDone(e, { ok: false, error: errMsg(err) }),
+      );
+    }
+  }
+
+  private claudeDone(e: Entry, r: ClaudeResumeResult): void {
+    if (this.messages.get(e.msg.id) !== e) return;
+    if (e.msg.status !== 'sent' && !(e.msg.status === 'failed' && e.late)) return;
+    const now = this.now();
+    if (r.ok) this.finish(e, 'delivered', now);
+    else this.fail(e, now, truncate(r.error, ERROR_MAX) || ERR_CLAUDE_UNAVAILABLE);
+    this.pumpClaude();
   }
 
   /** Thread e pasta da conta de uma mensagem ao Codex; sem elas, a mensagem falha (e devolve undefined). */
@@ -518,9 +584,18 @@ export class MessageRegistry {
         continue;
       }
       busy.add(e.msg.agentId);
+      const resume = agent.status === 'idle';
+      const cwd = resume ? this.opts.office.roomPath?.(agent.roomId) : undefined;
+      if (resume && !cwd) {
+        busy.delete(agent.id);
+        this.fail(e, now, ERR_ANTIGRAVITY_UNAVAILABLE);
+        continue;
+      }
       this.setStatus(e, 'sent', now);
       e.sentAt = now;
-      run({ conversationId: agent.sessionId, text: e.text }).then(
+      e.resume = resume;
+      if (resume) e.msg.resumed = true;
+      run({ conversationId: agent.sessionId, text: e.text, ...(resume ? { resume: true, cwd, antigravityHome: this.opts.antigravity?.homeOf?.(agent.account) } : {}) }).then(
         (r) => this.antigravityDone(e, r),
         (err: unknown) => this.antigravityDone(e, { ok: false, error: errMsg(err) }),
       );
@@ -542,7 +617,10 @@ export class MessageRegistry {
     if (this.messages.get(e.msg.id) !== e) return;
     if (e.msg.status !== 'sent' && !(e.msg.status === 'failed' && e.late)) return;
     const now = this.now();
-    if (r.ok) this.finish(e, 'delivered', now);
+    if (r.ok) {
+      if (r.queued) delete e.msg.resumed;
+      this.finish(e, 'delivered', now);
+    }
     else this.fail(e, now, truncate(r.error, ERROR_MAX) || ERR_CODEX_REFUSED);
     this.pumpCodex();
   }

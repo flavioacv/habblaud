@@ -484,12 +484,19 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
   Habblaud…". Não há "sempre permitir" nem "interromper", e o Codex não deixa responder as perguntas dele por fora.
 - **Mandar mensagens:** a caixa **Mandar mensagem** funciona para o Codex. Se a sessão estiver ocupada, o Habblaud
   usa `codex queue`; quando estiver ociosa (inclusive depois de uma interrupção), retoma a mesma conversa com
-  `codex exec resume` e envia a mensagem como um novo turno. A execução e as aprovações aparecem no Habblaud. No modo
+  `codex exec resume` e envia a mensagem como um novo turno. Se a sessão interrompida ainda mantiver o thread aberto,
+  o Habblaud detecta o conflito de escritor e põe a mensagem em `codex queue`, sem remover o lock da sessão. A execução
+  e as aprovações aparecem no Habblaud. No modo
   Node o próprio Habblaud roda o comando; **no Docker**, deixe `npm run codex:bridge` rodando no Mac (o container não
   enxerga o seu Codex).
-- Para sessões Antigravity abertas, a mesma caixa envia a mensagem diretamente à conversa pelo `agy agentapi
-  send-message`. O Habblaud procura `agy` no `PATH` ou em `~/.local/bin/agy`; use `HABBLAUD_AGY_BIN` para informar
-  outro caminho. No Docker, esse envio fica indisponível porque o container não acessa o processo local do Antigravity.
+- **Claude Code:** com a sessão conectada, o plugin `habblaud-mensagens` entrega o texto na sessão. Se ela estiver
+  ociosa e o plugin não estiver conectado (por exemplo, depois de interromper o turno), o Habblaud retoma o mesmo
+  session ID com `claude --print --resume` e espera o turno terminar. Precisa do `claude` no `PATH` ou
+  `HABBLAUD_CLAUDE_BIN`; funciona fora do Docker.
+- **Antigravity:** com a sessão ocupada, o Habblaud envia pela `agy agentapi send-message`; se estiver ociosa, retoma a
+  mesma conversa com `agy --conversation <id> --print <mensagem>`. O Habblaud procura `agy` no `PATH` ou em
+  `~/.local/bin/agy`; use `HABBLAUD_AGY_BIN` para informar outro caminho. No Docker, o envio e a retomada ficam
+  indisponíveis porque o container não acessa o processo local do Antigravity.
 - **Uso de 5 horas e semanal:** vem dos próprios arquivos do Codex e só se renova enquanto alguma sessão roda; o cartão
   mostra a idade dos números e "sem cota" quando o workspace ficou sem créditos.
 - **Quando a sessão entra:** com a primeira mensagem (é quando o Codex grava a pasta do projeto); uma CLI aberta e
@@ -618,6 +625,7 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
 | `HABBLAUD_AGY_BIN` | `agy` do PATH ou `~/.local/bin/agy` | Executável do Antigravity para enviar mensagens às conversas abertas (fora do Docker). |
+| `HABBLAUD_CLAUDE_BIN` | `claude` do PATH | Executável do Claude Code usado para retomar sessões ociosas sem o plugin (fora do Docker). |
 | `HABBLAUD_AGENT_ID` | — | Identidade do agente no cliente MCP; usada como origem de delegações e identidade ao responder tarefas. |
 | `HABBLAUD_URL` | `http://127.0.0.1:4747` | URL local da API usada pelo servidor MCP (só loopback é aceito). |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (uma consulta às releases do repositório no GitHub a cada 6 h). |
