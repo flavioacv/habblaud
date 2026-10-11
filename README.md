@@ -482,9 +482,10 @@ chip da conta do Codex é vazado e leva o selo **CODEX**.
   **Aprovar** ou **Recusar** (com o motivo). Diferente do Claude Code, o Codex só mostra a aprovação no terminal
   **depois** que o escritório responde ou o prazo acaba — nesse meio-tempo o terminal mostra "Aguardando resposta no
   Habblaud…". Não há "sempre permitir" nem "interromper", e o Codex não deixa responder as perguntas dele por fora.
-- **Mandar mensagens:** a caixa **Mandar mensagem** funciona para o Codex também, pelo `codex queue`: a mensagem entra
-  na fila da sessão e o Codex a pega quando termina o que está fazendo (até uns 10 segundos depois). No modo Node o
-  próprio Habblaud roda o comando; **no Docker**, deixe `npm run codex:bridge` rodando no Mac (o container não
+- **Mandar mensagens:** a caixa **Mandar mensagem** funciona para o Codex. Se a sessão estiver ocupada, o Habblaud
+  usa `codex queue`; quando estiver ociosa (inclusive depois de uma interrupção), retoma a mesma conversa com
+  `codex exec resume` e envia a mensagem como um novo turno. A execução e as aprovações aparecem no Habblaud. No modo
+  Node o próprio Habblaud roda o comando; **no Docker**, deixe `npm run codex:bridge` rodando no Mac (o container não
   enxerga o seu Codex).
 - Para sessões Antigravity abertas, a mesma caixa envia a mensagem diretamente à conversa pelo `agy agentapi
   send-message`. O Habblaud procura `agy` no `PATH` ou em `~/.local/bin/agy`; use `HABBLAUD_AGY_BIN` para informar

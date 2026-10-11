@@ -22,7 +22,7 @@ import { describeMessage, MESSAGE_MAX } from '../../shared/messages';
 import type { Activity, AgentInfo, InboxMessage, OutboxMessage } from '../../shared/types';
 import { errMsg, log } from '../log';
 import type { AntigravityMessageResult, AntigravityMessageRunner } from './antigravity';
-import type { CodexQueueResult, CodexQueueRunner } from './codex';
+import { RESUME_TIMEOUT_MS, type CodexQueueResult, type CodexQueueRunner } from './codex';
 
 /** Sessão que perguntou pela caixa de entrada há até este tempo: recebe mensagens (canMessage). */
 export const PRESENCE_MS = 10_000;
@@ -31,7 +31,7 @@ export const QUEUED_TIMEOUT_MS = 60_000;
 /** Mensagem buscada que a sessão não confirmou neste tempo: falha. */
 export const SENT_TIMEOUT_MS = 30_000;
 /** Mensagem resolvida (entregue ou não) fica este tempo para GET /api/messages/:id e depois some. */
-export const KEEP_MS = 10 * 60_000;
+export const KEEP_MS = 35 * 60_000;
 /** Entrega fictícia de uma mensagem a um agente do demo. */
 export const DEMO_DELIVERY_MS = 1_000;
 export const MAX_TEXT = MESSAGE_MAX;
@@ -111,6 +111,8 @@ export interface CodexBridgeMessage {
   thread: string;
   /** O texto como foi digitado. */
   text: string;
+  /** Inicia um novo turno quando a sessão está ociosa; caso contrário, usa a fila. */
+  resume?: boolean;
 }
 
 /** Erro de validação do corpo (vira 400). */
@@ -132,6 +134,7 @@ interface Entry {
   /** Mensagem a um agente Antigravity, enviada pelo runner `agy agentapi`. */
   antigravity?: true;
   via?: 'node' | 'bridge';
+  resume?: boolean;
   /** Falhou por falta de confirmação: uma confirmação atrasada ainda corrige a situação. */
   late?: boolean;
 }
@@ -384,9 +387,20 @@ export class MessageRegistry {
       this.setStatus(e, 'sent', now);
       e.sentAt = now;
       e.via = 'bridge';
-      out.push({ id: e.msg.id, account: target.account, codexHome: target.codexHome, thread: target.thread, text: e.text });
+      const resume = this.opts.office.get(e.msg.agentId)?.status === 'idle';
+      e.resume = resume;
+      if (resume) e.msg.resumed = true;
+      out.push({ id: e.msg.id, account: target.account, codexHome: target.codexHome, thread: target.thread, text: e.text, ...(resume ? { resume: true } : {}) });
     }
     return out;
+  }
+
+  /** Mantém o auxiliar visível enquanto ele aguarda a conclusão de uma retomada longa. */
+  codexHeartbeat(raw: unknown): void {
+    if (!rec(raw)) throw new InvalidRequest('esperado um objeto JSON ({})');
+    const was = this.codexAvailable();
+    this.bridgeAt = this.now();
+    if (!was) this.opts.office.markDirty();
   }
 
   /**
@@ -426,7 +440,7 @@ export class MessageRegistry {
       if (!present(this.opts.office.get(e.msg.agentId))) this.fail(e, now, ERR_GONE);
       else if (e.msg.status === 'queued' && now - e.msg.createdAt >= this.queuedTimeoutMs) {
         this.fail(e, now, e.antigravity ? ERR_ANTIGRAVITY_UNAVAILABLE : !e.codex ? ERR_NOT_FETCHED : this.opts.codex?.run ? ERR_CODEX_SLOW : ERR_CODEX_NOT_FETCHED);
-      } else if (e.msg.status === 'sent' && now - (e.sentAt ?? now) >= this.sentTimeoutMs) {
+      } else if (e.msg.status === 'sent' && now - (e.sentAt ?? now) >= (e.resume ? RESUME_TIMEOUT_MS + 5_000 : this.sentTimeoutMs)) {
         this.fail(e, now, e.antigravity ? ERR_ANTIGRAVITY_NOT_CONFIRMED : e.codex ? ERR_CODEX_NOT_CONFIRMED : ERR_NOT_CONFIRMED);
         e.late = true;
       }
@@ -479,7 +493,10 @@ export class MessageRegistry {
       this.setStatus(e, 'sent', now);
       e.sentAt = now;
       e.via = 'node';
-      run({ codexHome: target.codexHome, thread: target.thread, text: e.text }).then(
+      const resume = this.opts.office.get(e.msg.agentId)?.status === 'idle';
+      e.resume = resume;
+      if (resume) e.msg.resumed = true;
+      run({ codexHome: target.codexHome, thread: target.thread, text: e.text, ...(resume ? { resume: true } : {}) }).then(
         (r) => this.codexDone(e, r),
         (err: unknown) => this.codexDone(e, { ok: false, error: errMsg(err) }),
       );

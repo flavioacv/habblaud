@@ -7,6 +7,7 @@
 //   POST /api/mod/inbox/ack     (plugin)  {session, results: [{id, ok, error?}]}: 200 {ok: true}
 //   POST /api/codex/bridge/poll (auxiliar do Codex no host, npm run codex:bridge)
 //                                         {}: 200 {messages: [{id, account, codexHome, thread, text}]} (marca a presença)
+//   POST /api/codex/bridge/heartbeat: {}: 200 {ok: true} (mantém a presença sem buscar mensagens)
 //   POST /api/codex/bridge/ack  (auxiliar) {results: [{id, ok, error?}]}: 200 {ok: true}
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HttpError, readJson, sendJson } from '../http/app';
@@ -58,6 +59,11 @@ export function createMessageRoutes(registry: MessageRegistry): (req: IncomingMe
     sendJson(res, 200, { ok: true });
   };
 
+  const codexHeartbeat = async (req: IncomingMessage, res: ServerResponse) => {
+    registry.codexHeartbeat(await readJson(req));
+    sendJson(res, 200, { ok: true });
+  };
+
   const post = (req: IncomingMessage, res: ServerResponse, handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>) => {
     if ((req.method ?? 'GET') !== 'POST') return methodNotAllowed(res, 'POST');
     handler(req, res).catch((err) => fail(res, err));
@@ -69,6 +75,7 @@ export function createMessageRoutes(registry: MessageRegistry): (req: IncomingMe
     if (path === '/api/mod/inbox/ack') return post(req, res, ack);
     if (path === '/api/codex/bridge/poll') return post(req, res, codexPoll);
     if (path === '/api/codex/bridge/ack') return post(req, res, codexAck);
+    if (path === '/api/codex/bridge/heartbeat') return post(req, res, codexHeartbeat);
     const m = ITEM.exec(path);
     if (!m) return sendJson(res, 404, { error: 'rota desconhecida' });
     const method = req.method ?? 'GET';
@@ -81,6 +88,6 @@ export function createMessageRoutes(registry: MessageRegistry): (req: IncomingMe
     }
     const msg = registry.get(id);
     if (msg) sendJson(res, 200, msg);
-    else sendJson(res, 404, { error: 'mensagem desconhecida: ela já foi resolvida há mais de 10 min ou o Habblaud reiniciou' });
+    else sendJson(res, 404, { error: 'mensagem desconhecida: ela já foi resolvida há mais de 35 min ou o Habblaud reiniciou' });
   };
 }

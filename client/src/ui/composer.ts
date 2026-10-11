@@ -234,7 +234,9 @@ export class MessageComposer {
       if (cur?.id !== id) return;
       const now = Date.now();
       if (m === null) return this.setState(agentId, { phase: 'failed', id, error: LOST_ERROR, at: now });
-      if (m && (m.status !== cur.phase || m.error !== cur.error)) this.setState(agentId, { phase: m.status, id, error: m.error, at: now });
+      if (m && (m.status !== cur.phase || m.error !== cur.error || m.resumed !== cur.resumed)) {
+        this.setState(agentId, { phase: m.status, id, error: m.error, resumed: m.resumed, at: now });
+      }
       if (m && isSettled(m.status)) return;
       const elapsed = now - since;
       if (elapsed >= POLL_LIMIT_MS) return this.setState(agentId, { phase: 'failed', id, error: timeoutError(this.providers.get(agentId)), at: now });

@@ -40,6 +40,7 @@ export interface BridgeMessage {
   codexHome: string;
   thread: string;
   text: string;
+  resume?: boolean;
 }
 
 export interface BridgeResult {
@@ -92,7 +93,7 @@ export function checkMessage(raw: unknown): BridgeMessage | { id?: string; error
   if (typeof r.thread !== 'string' || !THREAD_ID.test(r.thread)) return { id, error: 'id de thread do Codex inválido' };
   const home = typeof r.codexHome === 'string' ? r.codexHome : '';
   if (!home || !isAbsolute(home) || !isDir(home) || isClaudeDir(home)) return { id, error: `a pasta do Codex ${home || '(vazia)'} não existe neste computador` };
-  return { id, account: typeof r.account === 'string' ? r.account : '', codexHome: resolve(home), thread: r.thread, text: r.text };
+  return { id, account: typeof r.account === 'string' ? r.account : '', codexHome: resolve(home), thread: r.thread, text: r.text, ...(r.resume === true ? { resume: true } : {}) };
 }
 
 /** POST JSON ao Habblaud local; null = fora do ar, tempo esgotado ou resposta ilegível. */
@@ -145,13 +146,21 @@ export async function round(post: Post, run: CodexQueueRunner, log: (line: strin
       continue;
     }
     let r: CodexQueueResult;
+    let heartbeatBusy = false;
+    const heartbeat = m.resume ? setInterval(() => {
+      if (heartbeatBusy) return;
+      heartbeatBusy = true;
+      void post('/api/codex/bridge/heartbeat', {}).finally(() => { heartbeatBusy = false; });
+    }, 3_000) : undefined;
     try {
-      r = await run({ codexHome: m.codexHome, thread: m.thread, text: m.text });
+      r = await run({ codexHome: m.codexHome, thread: m.thread, text: m.text, ...(m.resume ? { resume: true } : {}) });
     } catch (err) {
       r = { ok: false, error: String(err) };
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
     }
     results.push(r.ok ? { id: m.id, ok: true } : { id: m.id, ok: false, error: r.error });
-    log(r.ok ? `✓ mensagem na fila do thread ${m.thread.slice(0, 8)}… (${m.account || 'Codex'})` : `✗ thread ${m.thread.slice(0, 8)}…: ${r.error}`);
+    log(r.ok ? `${m.resume ? '✓ retomada concluída' : '✓ mensagem na fila'} do thread ${m.thread.slice(0, 8)}… (${m.account || 'Codex'})` : `✗ thread ${m.thread.slice(0, 8)}…: ${r.error}`);
   }
   if (results.length) await post('/api/codex/bridge/ack', { results });
   return { state: 'ok', results };

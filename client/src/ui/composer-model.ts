@@ -70,6 +70,8 @@ export interface SendState {
   /** Id da mensagem no servidor (depois do 201). */
   id?: string;
   error?: string;
+  /** O Codex iniciou um novo turno em uma sessão ociosa. */
+  resumed?: boolean;
   /** Última mudança (epoch ms, relógio da página). */
   at: number;
 }
@@ -91,11 +93,12 @@ export function sendStatusText(s: SendState | undefined, now: number, provider: 
     case 'queued':
       return codex ? 'Na fila: entregando ao Codex…' : 'Na fila: esperando a sessão buscar a mensagem…';
     case 'sent':
-      return 'Entregando à sessão…';
+      return s.resumed ? 'Retomando a conversa no Codex…' : 'Entregando à sessão…';
     case 'delivered':
-      // Entregue = entrou na sessão ou na fila dela (com o agente ocupado, só entra quando ele terminar o turno). No
-      // Codex é sempre a fila: o dono da sessão a consulta a cada ~10 s e só a usa com a sessão ociosa.
+      // Entregue = entrou na sessão ou na fila dela. Para o Codex o estado `resumed` indica que um novo turno foi
+      // executado até o fim, em vez de apenas aceito na fila.
       if (now - s.at >= DELIVERED_SHOW_MS) return '';
+      if (s.resumed) return 'Turno do Codex concluído ✓';
       return codex
         ? 'Entregue ✓ na fila da sessão: entra quando o Codex terminar o que está fazendo (até ~10 s)'
         : 'Entregue ✓ (se o agente estiver ocupado, entra quando ele terminar)';
@@ -106,8 +109,8 @@ export function sendStatusText(s: SendState | undefined, now: number, provider: 
   }
 }
 
-/** Consulta da entrega: o servidor leva até ~90 s para desistir (60 s na fila + 30 s sem confirmação). */
-export const POLL_LIMIT_MS = 120_000;
+/** Consulta da entrega: cobre a retomada headless do Codex, limitada a 30 min no servidor. */
+export const POLL_LIMIT_MS = 31 * 60_000;
 
 /** Espera até a próxima consulta: rápida no começo (a sessão busca a cada 2 s), mais espaçada depois. */
 export function pollDelay(elapsed: number): number {
@@ -117,7 +120,7 @@ export function pollDelay(elapsed: number): number {
 }
 
 export const LOST_ERROR = 'o Habblaud não conhece mais esta mensagem (ele reiniciou?)';
-export const TIMEOUT_ERROR = 'sem notícia da entrega: confira no terminal do Claude Code';
+export const TIMEOUT_ERROR = 'sem notícia da entrega: confira o terminal da sessão';
 export const CODEX_TIMEOUT_ERROR = 'sem notícia da entrega: confira no Codex';
 export const OFFLINE_ERROR = 'não foi possível falar com o Habblaud';
 

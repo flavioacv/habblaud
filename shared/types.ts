@@ -614,6 +614,8 @@ export interface OutboxMessage {
   /** AgentInfo.id do destinatário (sempre um principal). */
   agentId: string;
   status: OutboxStatus;
+  /** Codex: a sessão ociosa recebeu um novo turno por `exec resume`, em vez de entrar só na fila. */
+  resumed?: boolean;
   error?: string;
   createdAt: number;
   /** Última mudança de status. */

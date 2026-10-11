@@ -1,20 +1,21 @@
-// Mensagens pelo escritório para as sessões do Codex: `codex queue --thread <threadId> --message <texto>` põe a
-// mensagem na fila do thread (ela entra quando a sessão fica ociosa; o dono do thread consulta a fila a cada ~10 s; o
-// turno que ela abre traz turn_trigger "queue"). O comando precisa rodar no Mac (host), com o CODEX_HOME da conta:
+// Mensagens pelo escritório para as sessões do Codex. Sessão ocupada: `codex queue` põe a mensagem na fila. Sessão
+// ociosa: `codex exec resume` abre um novo turno na mesma conversa, inclusive quando o turno anterior foi interrompido.
+// Os comandos rodam no Mac (host), com o CODEX_HOME da conta:
 // - modo Node: o próprio servidor roda o comando (binário HABBLAUD_CODEX_BIN ou `codex` do PATH);
 // - Docker: o auxiliar do host (scripts/codex-bridge.ts, npm run codex:bridge) busca as mensagens em
 //   POST /api/codex/bridge/poll, roda o mesmo comando e confirma em POST /api/codex/bridge/ack.
-// Sem shell (execFile), com prazo, e nunca com -c, --enable, --disable nem --no-daemon (mudariam a configuração ou o
-// servidor da sessão). Retorno 0 ("Queued message <id> for thread <thread>.") = entrou na fila — mesmo que ninguém
-// esteja com o thread aberto agora; outro retorno = falhou, e a 1ª linha do stderr diz por quê ("Error: ... no rollout
-// found for thread id ..."). Se o servidor compartilhado do Codex (daemon) não estiver no ar, o próprio comando o sobe.
+// Sem shell e com prazo; nunca passa -c, --enable, --disable nem --no-daemon (mudariam a configuração ou o servidor
+// da sessão). `queue` confirma que entrou na fila; `exec resume` confirma quando o novo turno termina. Erros trazem a
+// primeira linha do stderr. Se o servidor compartilhado do Codex (daemon) não estiver no ar, o próprio comando o sobe.
 // Node puro e sem dependências: também é importado pelo auxiliar do host (via tsx).
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 
 /** Prazo de um `codex queue`. */
 export const QUEUE_TIMEOUT_MS = 20_000;
+/** Prazo máximo de uma retomada não interativa. */
+export const RESUME_TIMEOUT_MS = 30 * 60_000;
 /** Id de thread do Codex (UUID; `codex queue --thread` também aceitaria nomes, mas o Habblaud só manda ids). */
 export const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ERROR_MAX = 300;
@@ -26,6 +27,8 @@ export interface CodexQueueJob {
   thread: string;
   /** O texto como foi digitado. */
   text: string;
+  /** Abre um novo turno na mesma conversa ociosa em vez de apenas enfileirar. */
+  resume?: boolean;
 }
 
 export type CodexQueueResult = { ok: true } | { ok: false; error: string };
@@ -63,6 +66,11 @@ export function queueArgs(thread: string, text: string): string[] {
   return ['queue', `--thread=${thread}`, `--message=${text}`];
 }
 
+/** Argumentos para criar um turno headless na conversa existente. */
+export function resumeArgs(thread: string, text: string): string[] {
+  return ['exec', 'resume', '--json', thread, text];
+}
+
 /** Primeira linha não vazia (o Codex escreve o erro como "Error: ..."), cortada. */
 export function firstLine(s: string | undefined): string | undefined {
   const line = (s ?? '')
@@ -81,6 +89,39 @@ export function createCodexQueueRunner(bin: string, opts: { env?: NodeJS.Process
       if (!THREAD_ID.test(job.thread)) return done({ ok: false, error: 'id de thread do Codex inválido' });
       if (!isAbsolute(job.codexHome)) return done({ ok: false, error: 'pasta da conta do Codex inválida' });
       const env = { ...(opts.env ?? process.env), CODEX_HOME: job.codexHome };
+      if (job.resume) {
+        let child: ReturnType<typeof spawn> | undefined;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let stderr = '';
+        let settled = false;
+        const finish = (result: CodexQueueResult) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          done(result);
+        };
+        timer = setTimeout(() => {
+          child?.kill('SIGTERM');
+          finish({ ok: false, error: `a retomada do Codex passou de ${Math.round(RESUME_TIMEOUT_MS / 60_000)} min` });
+        }, RESUME_TIMEOUT_MS);
+        timer.unref?.();
+        try {
+          const spawned = spawn(bin, resumeArgs(job.thread, job.text), { env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+          child = spawned;
+          spawned.stderr?.on('data', (chunk: Buffer) => {
+            if (stderr.length < 16_000) stderr += chunk.toString('utf8').slice(0, 16_000 - stderr.length);
+          });
+          spawned.once('error', (err: NodeJS.ErrnoException) => {
+            finish({ ok: false, error: err.code === 'ENOENT' || err.code === 'EACCES' ? `não consegui rodar o Codex (${bin})` : err.message });
+          });
+          spawned.once('close', (code) => {
+            finish(code === 0 ? { ok: true } : { ok: false, error: firstLine(stderr) ?? `codex exec resume falhou (código ${String(code ?? '?')})` });
+          });
+        } catch {
+          finish({ ok: false, error: 'a mensagem tem caracteres que não dá para mandar ao Codex' });
+        }
+        return;
+      }
       try {
         execFile(bin, queueArgs(job.thread, job.text), { env, timeout: timeoutMs, maxBuffer: 256 * 1024, windowsHide: true, encoding: 'utf8' }, (err, _stdout, stderr) => {
           if (!err) return done({ ok: true });
