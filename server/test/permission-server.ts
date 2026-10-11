@@ -33,7 +33,7 @@ export interface PermissionServer {
 }
 
 export async function servePermissions(
-  opts: { enabled?: boolean; viewers?: number; demo?: boolean; registry?: Partial<RegistryOptions>; codex?: boolean; codexLive?: CodexLive } = {},
+  opts: { enabled?: boolean; viewers?: number; demo?: boolean; registry?: Partial<RegistryOptions>; codex?: boolean; codexLive?: CodexLive; antigravity?: boolean } = {},
 ): Promise<PermissionServer> {
   const tmp = tempDir();
   const enabled = opts.enabled ?? true;
@@ -84,6 +84,9 @@ export async function servePermissions(
   office.addMain({ id: MAIN, account: 'acc', sessionId: SESSION, cwd: '/p/loja', role: 'Agente principal', startedAt: Date.now(), status: 'working' });
   if (opts.codex) {
     office.addMain({ id: CODEX_MAIN, provider: 'codex', account: '.codex', sessionId: CODEX_THREAD, cwd: '/p/loja', role: 'Agente principal', startedAt: Date.now(), status: 'working' });
+  }
+  if (opts.antigravity) {
+    office.addMain({ id: 'antigravity-cli:conv-123', provider: 'antigravity', account: 'antigravity-cli', sessionId: 'conv-123', cwd: '/p/loja', role: 'Agente principal (Antigravity)', startedAt: Date.now(), status: 'working' });
   }
   if (opts.demo) office.setDemo(true);
   return {

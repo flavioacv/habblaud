@@ -16,10 +16,11 @@
 // sugestões nem perguntas; recusar só com motivo (sem interromper); sem a busca da resposta no transcript (no Codex o
 // terminal só pede a aprovação depois que o hook termina, então ela nunca é respondida lá enquanto ele espera).
 import { randomBytes } from 'node:crypto';
-import { describeTool, maskSecrets, truncate } from '../../shared/activity';
+import { describeTool, maskSecrets, truncate, type ActivityDescription } from '../../shared/activity';
 import { ANSWER_OTHER_MAX, answerSummary, ASK_TOOL, checkAnswers } from '../../shared/answers';
-import type { Activity, AgentInfo, PermissionAnswer, PermissionDecision, PermissionRequestInfo, PermissionSuggestionInfo } from '../../shared/types';
+import type { Activity, AgentInfo, PermissionAnswer, PermissionDecision, PermissionRequestInfo, PermissionSuggestionInfo, TerminalInputKind } from '../../shared/types';
 import { errMsg, log } from '../log';
+import { describeAntigravityTool } from '../sources/antigravity/transcript';
 import { toolView } from '../sources/terminal';
 import { codexToolView } from './codex';
 import { callSignature, scanToolCall } from './transcript';
@@ -255,7 +256,7 @@ export function applyPermission(a: AgentInfo, p: PermissionRequestInfo | undefin
  * `agent_id` é o thread do subagente (e `session_id`, o thread raiz).
  */
 export function parseHookInput(raw: unknown): {
-  provider?: 'codex';
+  provider?: 'codex' | 'antigravity';
   account?: string;
   codexHome?: string;
   sessionId: string;
@@ -273,8 +274,10 @@ export function parseHookInput(raw: unknown): {
   if (!r || !sessionId || !tool) throw new InvalidRequest('esperado o JSON do hook PermissionRequest (session_id e tool_name)');
   const t = typeof r.timeout_ms === 'number' && Number.isFinite(r.timeout_ms) ? r.timeout_ms : DEFAULT_TIMEOUT_MS;
   const codex = r.provider === 'codex';
+  const antigravity = r.provider === 'antigravity';
   return {
     ...(codex ? { provider: 'codex' as const, account: shortStr(r.account, 200), codexHome: shortStr(r.codexHome, 4_096) } : {}),
+    ...(antigravity ? { provider: 'antigravity' as const, account: shortStr(r.account, 200) } : {}),
     sessionId,
     agentId: shortStr(r.agent_id, 200),
     agentType: shortStr(r.agent_type, 120),
@@ -383,26 +386,57 @@ export class PermissionRegistry {
   register(raw: unknown): RegisterResult {
     const req = parseHookInput(raw);
     const codex = req.provider === 'codex';
-    const desc = codex ? codexToolView(req.tool, req.input, req.cwd) : describeTool(req.tool, req.input);
-    const questions = 'questions' in desc ? desc.questions : undefined;
+    const antigravity = req.provider === 'antigravity';
+    let title: string;
+    let text: string;
+    let icon: string;
+    let input: string | undefined;
+    let inputKind: TerminalInputKind | undefined;
+
+    if (codex) {
+      const cView = codexToolView(req.tool, req.input, req.cwd);
+      title = cView.title;
+      text = cView.text;
+      icon = cView.icon;
+      input = cView.input;
+      inputKind = cView.inputKind;
+    } else if (antigravity) {
+      const agyDesc = describeAntigravityTool(req.tool, req.input);
+      const tView = toolView(agyDesc.tool, req.input, req.cwd);
+      title = tView.title;
+      text = agyDesc.desc.text;
+      icon = agyDesc.desc.icon;
+      input = tView.input;
+      inputKind = tView.inputKind;
+    } else {
+      const desc = describeTool(req.tool, req.input);
+      const tView = toolView(req.tool, req.input, req.cwd);
+      title = tView.title;
+      text = desc.text;
+      icon = desc.icon;
+      input = tView.input;
+      inputKind = tView.inputKind;
+    }
+
+    const questions = !codex && !antigravity && 'questions' in describeTool(req.tool, req.input)
+      ? (describeTool(req.tool, req.input) as any).questions
+      : undefined;
     const ask = isQuestion(req);
     // Pergunta: todas precisam aparecer no escritório (o hook só responde se cada uma tiver resposta).
     if (ask && (!questions?.length || questions.length !== askCount(req.input.questions))) return { skip: 'unsupported-tool' };
     if (this.opts.viewers() <= 0) return { skip: 'no-viewers' };
     const target = codex
       ? this.resolveCodexAgent(req.sessionId, req.agentId, req.agentType, this.opts.codexAccount?.(req.account, req.codexHome) ?? req.account)
-      : this.resolveAgent(req.sessionId, req.agentId, req.agentType);
+      : this.resolveAgent(req.sessionId, req.agentId, req.agentType, antigravity ? 'antigravity' : undefined);
     if (!target) return { skip: 'unknown-session' };
     if (this.size >= this.maxPending) return { skip: 'too-many' };
 
     const now = this.now();
     const id = `p-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;
-    // Codex: título, resumo e argumentos pelos nomes de ferramenta dele (permissions/codex.ts).
-    const view = 'title' in desc ? desc : toolView(req.tool, req.input, req.cwd);
-    const info: PermissionRequestInfo = { id, tool: req.tool, title: view.title, text: desc.text, icon: desc.icon, createdAt: now, expiresAt: now + req.timeoutMs };
-    if (codex) info.provider = 'codex';
-    if (view.input) info.input = view.input;
-    if (view.inputKind) info.inputKind = view.inputKind;
+    const info: PermissionRequestInfo = { id, tool: req.tool, title, text, icon, createdAt: now, expiresAt: now + req.timeoutMs };
+    if (req.provider) info.provider = req.provider;
+    if (input) info.input = input;
+    if (inputKind) info.inputKind = inputKind;
     if (target.subagent) info.subagent = target.subagent;
     const suggestions = pickSuggestions(req.suggestions);
     if (suggestions.length) info.suggestions = suggestions;
@@ -412,7 +446,7 @@ export class PermissionRegistry {
       info,
       agentId: target.id,
       sessionId: req.sessionId,
-      signature: codex ? '' : callSignature(req.tool, req.input),
+      signature: codex || antigravity ? '' : callSignature(req.tool, req.input),
       lastScanAt: 0,
       waiters: new Set(),
       idleSince: now,
@@ -429,8 +463,8 @@ export class PermissionRegistry {
       this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '❓', text: truncate(`Pergunta: ${first}`, 46), detail: truncate(all, 300), tool: 'PermissionRequest' }, false);
       this.opts.office.noticePermission(target.id, `${truncate(first, 120)}${by}`, 'question');
     } else {
-      this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(`Pede permissão: ${desc.text}`, 46), detail: view.title, tool: 'PermissionRequest' }, false);
-      this.opts.office.noticePermission(target.id, `${desc.text}${by}`);
+      this.opts.office.addActivity(target.id, { id: `${target.id}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(`Pede permissão: ${text}`, 46), detail: title, tool: 'PermissionRequest' }, false);
+      this.opts.office.noticePermission(target.id, `${text}${by}`);
     }
     this.opts.office.markDirty();
     return { id, expiresAt: info.expiresAt + EXPIRY_GRACE_MS };
@@ -544,8 +578,8 @@ export class PermissionRegistry {
       if (now >= p.info.expiresAt + EXPIRY_GRACE_MS) this.release(p, 'expired');
       else if (!p.waiters.size && now - p.idleSince >= this.orphanMs) this.release(p, 'orphan');
       else if (!present(this.opts.office.get(p.agentId))) this.release(p, 'gone');
-      // No Codex o terminal só pede a aprovação depois que o hook termina: não há resposta dada lá para procurar.
-      else if (p.codex) continue;
+      // No Codex e Antigravity, o terminal só pede a aprovação depois que o hook termina (ou usa formato próprio).
+      else if (p.codex || p.info.provider === 'antigravity') continue;
       else if (now - p.lastScanAt >= SCAN_EVERY_MS && this.answeredInTerminal(p, now)) this.release(p, 'answered');
       else if (this.leftWaiting(p, now)) this.release(p, 'answered');
     }
@@ -553,14 +587,14 @@ export class PermissionRegistry {
 
   // ---------------------------------------------------------------- internos
 
-  private resolveAgent(sessionId: string, agentId?: string, agentType?: string): { id: string; subagent?: string } | undefined {
+  private resolveAgent(sessionId: string, agentId?: string, agentType?: string, provider?: 'antigravity'): { id: string; subagent?: string } | undefined {
     const office = this.opts.office;
     if (agentId) {
       const subId = `${sessionId}:${agentId}`;
       const sub = office.get(subId);
-      if (present(sub) && sub.provider !== 'codex') return { id: subId };
+      if (present(sub) && sub.provider !== 'codex' && (!provider || sub.provider === provider)) return { id: subId };
     }
-    const main = office.list().find((a) => a.kind === 'main' && a.provider !== 'codex' && a.sessionId === sessionId && a.status !== 'offline');
+    const main = office.list().find((a) => a.kind === 'main' && a.provider !== 'codex' && (!provider || a.provider === provider) && a.sessionId === sessionId && a.status !== 'offline');
     if (!main) return undefined;
     return agentId ? { id: main.id, subagent: agentType ?? 'subagente' } : { id: main.id };
   }
