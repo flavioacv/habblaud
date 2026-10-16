@@ -11,7 +11,6 @@ import { TILE } from '../constants';
 import { CAFE_ID, LOUNGE_ID, RECEPTION_ID, RESTROOM_ID } from '../layout/core';
 import type { SpotDef } from '../layout/types';
 import { FREE } from '../path/grid';
-import { isLongIdle } from '../sim/behavior';
 import { facing, type Character } from '../sim/character';
 import type { Sim } from '../sim/sim';
 import type { Step } from '../sim/steps';
@@ -38,6 +37,7 @@ import {
 import * as L from './lines';
 import { bondBetween, hasTrait, personaFor, TRAITS, type Persona, type TraitId } from './persona';
 import { DELIVERY_REWARD, TURN_REWARD, Wallets, type StorageLike } from './wallet';
+import { tr } from '../../../../shared/i18n';
 
 /** Texto flutuante sobre a cabeça ("+🪙10"), desenhado pelo overlay. */
 export interface Floater {
@@ -62,13 +62,13 @@ const COIN_COLOR = '#ffd34d';
 const LOSS_COLOR = '#ff8a8a';
 
 const KIND_LIST = Object.keys(KINDS) as GatherKind[];
-const PLACES: Readonly<Record<string, string>> = { [LOUNGE_ID]: 'Lounge', [CAFE_ID]: 'Copa', [RECEPTION_ID]: 'Recepção', [RESTROOM_ID]: 'Banheiros' };
+const PLACES: Readonly<Record<string, string>> = { [LOUNGE_ID]: tr('Lounge'), [CAFE_ID]: tr('Copa'), [RECEPTION_ID]: tr('Recepção'), [RESTROOM_ID]: tr('Banheiros') };
 /** O que se perde/ganha em cada jogo (texto do extrato: "Perdeu no jokenpô para Rafaela"). */
 const MATCH_WHAT: Partial<Record<GatherKind, string>> = {
-  rps: 'no jokenpô',
-  pingpong: 'no pingue-pongue',
-  videogame: 'no videogame',
-  arcade: 'no fliperama',
+  rps: tr('no jokenpô'),
+  pingpong: tr('no pingue-pongue'),
+  videogame: tr('no videogame'),
+  arcade: tr('no fliperama'),
 };
 
 function between(rng: () => number, a: number, b: number): number {
@@ -195,14 +195,14 @@ export class Social {
       .map((c) => {
         const cp = personaFor(c.info.seed);
         let s = partnerScore(kind, cp, bondBetween(host.info.seed, c.info.seed), rng);
-        if (isLongIdle(c.info.status, c.info.statusSince, now)) s -= 1.5;
+        if (this.sim.longIdle(c, now)) s -= 1.5;
         if (kind === 'mirror' && !hasTrait(cp, 'vaidade')) s -= 2;
         return { c, s };
       })
       .sort((a, b) => b.s - a.s);
     let chosen = ranked.slice(0, want).map((x) => x.c);
     // dorminhocos (ociosos há muito tempo) às vezes nem acordam com o convite
-    if (!forced) chosen = chosen.filter((c, i) => i < info.min - 1 || !isLongIdle(c.info.status, c.info.statusSince, now) || rng() < 0.35);
+    if (!forced) chosen = chosen.filter((c, i) => i < info.min - 1 || !this.sim.longIdle(c, now) || rng() < 0.35);
     if (chosen.length + 1 < (kind === 'mirror' ? (groupOnly ? 2 : 1) : info.min)) return false;
     const plan = this.plan(kind, chosen.length + 1, host);
     if (!plan) return false;
@@ -290,7 +290,7 @@ export class Social {
     }
     if (text) this.say(host, text, now);
     guests.forEach((c, i) => {
-      const sleepy = isLongIdle(c.info.status, c.info.statusSince, now);
+      const sleepy = this.sim.longIdle(c, now);
       const p = sleepy ? L.ACCEPT_SLEEPY : c.mode === 'shell' && g.kind !== 'rps' ? L.ACCEPT_SHELL : pool;
       g.pending.push({ id: c.id, at: now + 900 + i * 650, text: L.pick(p, rng) });
     });
@@ -382,7 +382,7 @@ export class Social {
     if (g.phase === 'run') this.basePose(g, m, now);
     g.members.push(m);
     this.dispatch(g, m, ch, now);
-    const line = g.kind === 'tv' ? 'Posso ver junto? 📺' : g.kind === 'kitchen' ? 'Tem lugar pra mais um? ☕' : 'Quem tá ganhando?';
+    const line = g.kind === 'tv' ? tr('Posso ver junto? 📺') : g.kind === 'kitchen' ? tr('Tem lugar pra mais um? ☕') : tr('Quem tá ganhando?');
     this.say(ch, line, now);
     return true;
   }
@@ -580,7 +580,7 @@ export class Social {
       const other = players(g)[0];
       const oc = other ? this.sim.chars.get(other.id) : undefined;
       if (oc) {
-        this.say(oc, 'Ganhei por W.O.! 😎', now);
+        this.say(oc, tr('Ganhei por W.O.! 😎'), now);
         this.act(other!, 'cheer', 'none', 1600, now);
       }
       g.phase = 'final';
@@ -952,7 +952,7 @@ export class Social {
     const cl = this.charOf(l);
     if (!cw || !cl) return;
     this.wallets.recordMatch(w.id, l.id);
-    const what = MATCH_WHAT[g.kind] ?? 'na aposta';
+    const what = MATCH_WHAT[g.kind] ?? tr('na aposta');
     const icon = KINDS[g.kind].emoji;
     const paid = g.bet ? this.wallets.transfer(l.id, w.id, g.bet, icon, what, now) : 0;
     if (paid) {
@@ -960,8 +960,8 @@ export class Social {
       this.float(cl, `−🪙${paid}`, LOSS_COLOR, now);
       this.sim.pushEffect({ kind: 'coins', charId: cl.id, toId: cw.id, at: now });
     }
-    const score = g.kind === 'pingpong' || g.kind === 'videogame' ? ` (${Math.max(...g.score)} a ${Math.min(...g.score)})` : '';
-    this.event(g, icon, cw.id, paid ? `ganhou 🪙${paid} de ${cl.info.name} ${what}${score}` : `venceu ${cl.info.name} ${what}${score}`, now);
+    const score = g.kind === 'pingpong' || g.kind === 'videogame' ? tr(' ({0} a {1})', [Math.max(...g.score), Math.min(...g.score)]) : '';
+    this.event(g, icon, cw.id, paid ? tr('ganhou 🪙{0} de {1} {2}{3}', [paid, cl.info.name, what, score]) : tr('venceu {0} {1}{2}', [cl.info.name, what, score]), now);
   }
 
   private beatChat(g: Gathering, now: number): void {
@@ -1141,13 +1141,13 @@ export class Social {
 
   /** Pedido do usuário atendido (fim de turno do principal). */
   turnDone(ch: Character, now: number): void {
-    const v = this.wallets.credit(ch.id, TURN_REWARD, '💬', 'Pedido atendido', now);
+    const v = this.wallets.credit(ch.id, TURN_REWARD, '💬', tr('Pedido atendido'), now);
     if (v) this.earned(ch, v, now);
   }
 
   /** Subagente entregou o resultado: a tarefa dele está paga. */
   delivered(ch: Character, now: number): void {
-    const v = this.wallets.credit(ch.id, DELIVERY_REWARD, '📦', `Entregou: ${ch.info.title ?? 'resultado'}`, now);
+    const v = this.wallets.credit(ch.id, DELIVERY_REWARD, '📦', tr('Entregou: {0}', [ch.info.title ?? tr('resultado')]), now);
     if (v) this.earned(ch, v, now);
   }
 
@@ -1167,9 +1167,9 @@ export class Social {
       .filter((m) => m.id !== id)
       .map((m) => this.sim.chars.get(m.id)?.info.name)
       .filter((n): n is string => !!n);
-    const label = g.kind === 'tv' && g.program ? `Vendo ${g.program === 'futebol' ? 'futebol' : g.program === 'novela' ? 'novela' : 'desenho'} na TV` : KINDS[g.kind].label;
-    const going = g.phase === 'gather' ? ' (a caminho)' : '';
-    const bet = g.bet && KINDS[g.kind].match ? ` · valendo 🪙${g.bet}` : '';
+    const label = g.kind === 'tv' && g.program ? tr('Vendo {0} na TV', [g.program === 'futebol' ? tr('futebol') : g.program === 'novela' ? tr('novela') : tr('desenho')]) : KINDS[g.kind].label;
+    const going = g.phase === 'gather' ? tr(' (a caminho)') : '';
+    const bet = g.bet && KINDS[g.kind].match ? tr(' · valendo 🪙{0}', [g.bet]) : '';
     return `${KINDS[g.kind].emoji} ${label}${others.length ? ` com ${joinNames(others)}` : ''}${bet}${going}`;
   }
 
@@ -1231,7 +1231,7 @@ export class Social {
     if (this.events.length >= MAX_EVENTS) this.events.shift();
     const first = g.members.find((m) => m.spot);
     const area = first?.spot ? this.sim.spots.get(first.spot)?.areaId : undefined;
-    const place = (area && (PLACES[area] ?? this.sim.rooms.get(area)?.info.name)) || 'Escritório';
+    const place = (area && (PLACES[area] ?? this.sim.rooms.get(area)?.info.name)) || tr('Escritório');
     this.events.push({ id: `social:${g.id}:${++this.eventSeq}`, at: now, icon, agentId, text, place });
   }
 

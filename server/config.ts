@@ -6,7 +6,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverClaudeDirs } from './accounts/detect';
 import { parseAllowedHosts } from './http/guard';
+import { parseRemoteConfig, type RemoteConfig } from './http/remote';
 import { parseGithubRepo } from './updates/checker';
+import { tr } from '../shared/i18n';
 
 export interface ServerConfig {
   port: number;
@@ -52,6 +54,32 @@ export interface ServerConfig {
   codex: boolean;
   /** Observa as sessões do Antigravity (sources/antigravity/); HABBLAUD_ANTIGRAVITY=0 desliga. */
   antigravity: boolean;
+  /** Segunda porta, com login, para o celular na rede local (http/remote.ts); ausente = desligada. */
+  remote?: RemoteConfig;
+  /** Por que o acesso remoto ficou desligado quando as variáveis estão incompletas. */
+  remoteWarning?: string;
+  /** Habblaud World (server/world/): conta, personagem e, nas próximas fases, o prédio no mundo. */
+  world: WorldConfig;
+}
+
+export interface WorldConfig {
+  /** HABBLAUD_WORLD diferente de 0 (false, off, no): as rotas /api/world/* existem e a interface mostra a seção. */
+  enabled: boolean;
+  /**
+   * Base HTTP(S) do servidor do mundo, sem barra no fim (de HABBLAUD_WORLD_URL ou, sem ela, DEFAULT_WORLD_URL;
+   * `wss://` vira `https://`). Ausente = HABBLAUD_WORLD_URL recusada (`warning` diz por quê): o recurso fica desligado
+   * e nada sai do computador. O WebSocket é a mesma origem com /v1/socket.
+   */
+  url?: string;
+  /** A URL veio do padrão (HABBLAUD_WORLD_URL ausente ou vazia). */
+  defaultUrl?: true;
+  /**
+   * `--dev` ou HABBLAUD_WORLD_DEV=1: aceita também `http://` e `ws://` para 127.0.0.1 e host.docker.internal (servidor do
+   * mundo local; do container do Habblaud, o host é host.docker.internal).
+   */
+  dev: boolean;
+  /** Por que HABBLAUD_WORLD_URL foi recusada (vai para o log ao iniciar). */
+  warning?: string;
 }
 
 export function isTruthy(v: string | undefined): boolean {
@@ -127,10 +155,10 @@ export function terminalOffReason(env: NodeJS.ProcessEnv, host: string, inDocker
   if (flag && !isTruthy(flag)) return `HABBLAUD_TERMINAL=${flag}`;
   if (inDocker) {
     const bind = env.HABBLAUD_BIND?.trim();
-    if (!bind) return 'HABBLAUD_BIND não chegou ao container, então a porta pode estar exposta na rede';
-    return isLoopbackBind(bind) ? undefined : `a porta está exposta na rede: HABBLAUD_BIND=${bind}`;
+    if (!bind) return tr('HABBLAUD_BIND não chegou ao container, então a porta pode estar exposta na rede');
+    return isLoopbackBind(bind) ? undefined : tr('a porta está exposta na rede: HABBLAUD_BIND={0}', [bind]);
   }
-  return isLoopbackBind(host) ? undefined : `a porta está exposta na rede: HABBLAUD_HOST=${host}`;
+  return isLoopbackBind(host) ? undefined : tr('a porta está exposta na rede: HABBLAUD_HOST={0}', [host]);
 }
 
 /**
@@ -142,7 +170,58 @@ export function messagesOffReason(env: NodeJS.ProcessEnv, host: string, inDocker
   const flag = env.HABBLAUD_MENSAGENS?.trim();
   if (flag && !isTruthy(flag)) return `HABBLAUD_MENSAGENS=${flag}`;
   const terminal = terminalOffReason(env, host, inDocker);
-  return terminal ? `mesma trava do terminal: ${terminal}` : undefined;
+  return terminal ? tr('mesma trava do terminal: {0}', [terminal]) : undefined;
+}
+
+/**
+ * O servidor do Habblaud World quando HABBLAUD_WORLD_URL está ausente ou vazia: o World vem ligado por padrão, mas nada
+ * sai do computador antes de a pessoa criar a conta e entrar (server/world/service.ts). HABBLAUD_WORLD=0 desliga tudo.
+ */
+export const DEFAULT_WORLD_URL = 'https://server.habblaud.com';
+
+/** Hosts aceitos sem TLS no modo de desenvolvimento: o próprio computador e, de dentro do Docker, o host. */
+const LOCAL_WORLD_HOSTS: readonly string[] = ['127.0.0.1', 'host.docker.internal'];
+
+/**
+ * Habblaud World a partir do ambiente. Sem HABBLAUD_WORLD_URL, DEFAULT_WORLD_URL. A URL só vale com `https://` ou
+ * `wss://` (o token do dispositivo nunca anda sem TLS); `http://` e `ws://` só no modo de desenvolvimento e só para
+ * 127.0.0.1 ou host.docker.internal (o servidor do mundo rodando no próprio computador, visto de fora ou de dentro do
+ * Docker). Nada de caminho, usuário, senha ou parâmetros: só o endereço do servidor. Uma URL definida e recusada não
+ * cai no padrão: o recurso fica desligado, com o motivo em `warning`.
+ */
+export function parseWorldConfig(env: NodeJS.ProcessEnv, argv: string[]): WorldConfig {
+  const flag = env.HABBLAUD_WORLD?.trim();
+  const enabled = !flag || isTruthy(flag);
+  const dev = argv.includes('--dev') || isTruthy(env.HABBLAUD_WORLD_DEV);
+  if (!enabled) return { enabled, dev };
+  const raw = env.HABBLAUD_WORLD_URL?.trim();
+  if (!raw) return { enabled, dev, url: DEFAULT_WORLD_URL, defaultUrl: true };
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return { enabled, dev, warning: tr('HABBLAUD_WORLD_URL não é um endereço válido') };
+  }
+  const secure = u.protocol === 'https:' || u.protocol === 'wss:';
+  const local = (u.protocol === 'http:' || u.protocol === 'ws:') && LOCAL_WORLD_HOSTS.includes(u.hostname);
+  if (!secure && !(local && dev)) {
+    return {
+      enabled,
+      dev,
+      warning: local
+        ? tr('HABBLAUD_WORLD_URL com http:// (127.0.0.1 ou host.docker.internal) só vale no modo de desenvolvimento (--dev ou HABBLAUD_WORLD_DEV=1)')
+        : tr('HABBLAUD_WORLD_URL precisa começar com https:// ou wss://'),
+    };
+  }
+  if (u.username || u.password || u.search || u.hash || (u.pathname !== '/' && u.pathname !== '')) {
+    return { enabled, dev, warning: tr('HABBLAUD_WORLD_URL deve ter só o endereço do servidor (sem caminho, usuário, senha ou parâmetros)') };
+  }
+  return { enabled, dev, url: `${secure ? 'https:' : 'http:'}//${u.host}` };
+}
+
+/** Endereço do WebSocket do mundo a partir da base HTTP(S) (ServerConfig.world.url). */
+export function worldSocketUrl(base: string): string {
+  return `${base.replace(/^http/, 'ws').replace(/\/+$/, '')}/v1/socket`;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] = process.argv): ServerConfig {
@@ -152,6 +231,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
   const rootDir = findRoot(dirname(fileURLToPath(import.meta.url)));
   const host = env.HABBLAUD_HOST?.trim() || '127.0.0.1';
   const pkg = readPackage(rootDir);
+  const remote = parseRemoteConfig(env, inDocker);
   return {
     port: Number.isFinite(port) && port > 0 && port < 65536 ? port : 4747,
     host,
@@ -172,5 +252,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
     updateCheck: !env.HABBLAUD_UPDATE_CHECK?.trim() || isTruthy(env.HABBLAUD_UPDATE_CHECK),
     codex: !env.HABBLAUD_CODEX?.trim() || isTruthy(env.HABBLAUD_CODEX),
     antigravity: !env.HABBLAUD_ANTIGRAVITY?.trim() || isTruthy(env.HABBLAUD_ANTIGRAVITY),
+    remote: remote.config,
+    remoteWarning: remote.warning,
+    world: parseWorldConfig(env, argv),
   };
 }

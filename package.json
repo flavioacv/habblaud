@@ -1,6 +1,6 @@
 {
   "name": "habblaud",
-  "version": "0.8.0",
+  "version": "1.0.3",
   "private": true,
   "description": "Escritório virtual animado que mostra, em tempo real, o que seus agentes do Claude Code estão fazendo.",
   "license": "MIT",
@@ -18,12 +18,14 @@
     "dev:client": "vite --config vite.config.ts",
     "demo": "HABBLAUD_DEMO=1 npm run dev",
     "demo:timeline": "tsx scripts/demo-timeline.ts",
+    "shots:world": "node scripts/world-shots.mjs",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build --config vite.config.ts",
     "build:server": "node scripts/build-server.mjs",
     "start": "node dist/server/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "test": "vitest run",
+    "i18n:check": "tsx scripts/i18n-check.ts",
     "docker:up": "tsx scripts/docker-up.ts",
     "docker:down": "tsx scripts/docker-up.ts --down",
     "docker:logs": "docker compose logs -f habblaud",
@@ -44,20 +46,29 @@
     "antigravity:install": "tsx scripts/antigravity-install.ts install",
     "antigravity:uninstall": "tsx scripts/antigravity-install.ts uninstall",
     "antigravity:status": "tsx scripts/antigravity-install.ts status",
+    "remote:setup": "tsx scripts/remote-setup.ts",
+    "remote:mdns": "tsx scripts/remote-mdns.ts",
     "release": "tsx scripts/release.ts"
   },
   "devDependencies": {
     "@fontsource/pixelify-sans": "^5.3.0",
     "@types/node": "^22.20.5",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "esbuild": "^0.28.2",
-    "playwright-core": "^1.63.0",
+    "playwright-core": "^1.64.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vite": "^8.3.3",
+    "vite": "^8.3.4",
     "vitest": "^5.0.3"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.3.1",
     "zod": "^4.6.5"
+  },
+  "optionalDependencies": {
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
+    "node-pty": "^1.1.0"
   }
 }

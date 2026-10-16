@@ -5,7 +5,8 @@
 // tivesse digitado e confirma em POST /api/mod/inbox/ack. O registro:
 // - marca a PRESENÇA de cada sessão que pergunta pela caixa de entrada (AgentInfo.canMessage, via Office);
 // - guarda as mensagens de cada agente na ordem e acompanha a situação delas (queued → sent → delivered/failed);
-// - falha as que ninguém buscou, as que a sessão não confirmou e as do agente que saiu;
+// - falha as que ninguém buscou, as que a sessão não confirmou, as do agente que saiu e as de uma conversa que já
+//   trocou (/clear, /resume): cada mensagem vale só para a sessão em que foi mandada;
 // - põe a atividade "Mensagem pelo Habblaud" no agente quando a sessão confirma a entrega;
 // - simula a entrega para os agentes do demo (nada vai a uma sessão de verdade).
 // O texto vai à sessão exatamente como foi digitado (é do próprio usuário) e nunca sai nas respostas da página nem
@@ -26,6 +27,7 @@ import { RESUME_TIMEOUT_MS as ANTIGRAVITY_RESUME_TIMEOUT_MS } from './antigravit
 import type { ClaudeResumeResult, ClaudeResumeRunner } from './claude';
 import { CLAUDE_RESUME_TIMEOUT_MS } from './claude';
 import { RESUME_TIMEOUT_MS, type CodexQueueResult, type CodexQueueRunner } from './codex';
+import { tr } from '../../shared/i18n';
 
 /** Sessão que perguntou pela caixa de entrada há até este tempo: recebe mensagens (canMessage). */
 export const PRESENCE_MS = 10_000;
@@ -43,17 +45,18 @@ export const MAX_OPEN = 5;
 /** Mensagens entregues ao plugin por rodada. */
 export const INBOX_BATCH = 5;
 
-export const ERR_NOT_FETCHED = 'a sessão não buscou a mensagem: o plugin habblaud-mensagens está instalado e a sessão aberta?';
-export const ERR_NOT_CONFIRMED = 'a sessão não confirmou a entrega';
-export const ERR_GONE = 'o agente saiu do escritório';
-export const ERR_REFUSED = 'a sessão não aceitou a mensagem';
+export const ERR_NOT_FETCHED = tr('a sessão não buscou a mensagem: o plugin habblaud-mensagens está instalado e a sessão aberta?');
+export const ERR_NOT_CONFIRMED = tr('a sessão não confirmou a entrega');
+export const ERR_GONE = tr('o agente saiu do escritório');
+export const ERR_REFUSED = tr('a sessão não aceitou a mensagem');
+export const ERR_SESSION_CHANGED = tr('a conversa do agente mudou (/clear ou /resume) antes da entrega');
 export const ERR_CODEX_UNAVAILABLE =
-  'não há como entregar ao Codex agora: rode o Habblaud fora do Docker com o `codex` no PATH (ou HABBLAUD_CODEX_BIN) ou, no Docker, deixe o npm run codex:bridge rodando no Mac';
-export const ERR_CODEX_NOT_FETCHED = 'o auxiliar do Codex não buscou a mensagem: o npm run codex:bridge está rodando no Mac?';
-export const ERR_CODEX_SLOW = 'o Codex demorou demais com as mensagens anteriores a este agente';
-export const ERR_CODEX_NOT_CONFIRMED = 'o auxiliar do Codex não confirmou a entrega';
-export const ERR_CODEX_HOME = 'a pasta da conta do Codex deste agente é desconhecida';
-export const ERR_CODEX_REFUSED = 'o codex queue não aceitou a mensagem';
+  tr('não há como entregar ao Codex agora: rode o Habblaud fora do Docker com o `codex` no PATH (ou HABBLAUD_CODEX_BIN) ou, no Docker, deixe o npm run codex:bridge rodando no Mac');
+export const ERR_CODEX_NOT_FETCHED = tr('o auxiliar do Codex não buscou a mensagem: o npm run codex:bridge está rodando no Mac?');
+export const ERR_CODEX_SLOW = tr('o Codex demorou demais com as mensagens anteriores a este agente');
+export const ERR_CODEX_NOT_CONFIRMED = tr('o auxiliar do Codex não confirmou a entrega');
+export const ERR_CODEX_HOME = tr('a pasta da conta do Codex deste agente é desconhecida');
+export const ERR_CODEX_REFUSED = tr('o codex queue não aceitou a mensagem');
 export const ERR_ANTIGRAVITY_UNAVAILABLE = 'não há como entregar ao Antigravity agora: configure HABBLAUD_AGY_BIN ou inclua `agy` no PATH';
 export const ERR_ANTIGRAVITY_NOT_CONFIRMED = 'o agy agentapi não confirmou a entrega';
 export const ERR_ANTIGRAVITY_REFUSED = 'o agy agentapi não aceitou a mensagem';
@@ -137,6 +140,8 @@ interface Entry {
   text: string;
   /** Atividade do feed quando a entrega se confirma (o começo do texto, mascarado e cortado). */
   activity: ReturnType<typeof describeMessage>;
+  /** Sessão do agente quando a mensagem foi mandada: só ela recebe (troca de conversa = falha). */
+  target: string;
   /** Sessão que buscou a mensagem (sent): só ela confirma a entrega. */
   session?: string;
   sentAt?: number;
@@ -175,14 +180,14 @@ const isFinal = (e: Entry) => e.msg.status === 'delivered' || e.msg.status === '
  * Por que o agente não recebe mensagens agora (undefined = recebe). `reachable`: a sessão tem o plugin conectado (ou,
  * no Codex, há entregador).
  */
-function unavailableReason(a: AgentInfo, reachable: boolean): string | undefined {
-  if (a.kind !== 'main') return 'subagentes não recebem mensagens: mande para o agente principal';
-  if (!present(a)) return 'o agente já saiu do escritório';
+function unavailableReason(a: AgentInfo, reachable: boolean, claudeResume = false): string | undefined {
+  if (a.kind !== 'main') return tr('subagentes não recebem mensagens: mande para o agente principal');
+  if (!present(a)) return tr('o agente já saiu do escritório');
   if (!reachable) {
     if (a.provider === 'codex') return ERR_CODEX_UNAVAILABLE;
     if (a.provider === 'antigravity') return ERR_ANTIGRAVITY_UNAVAILABLE;
-    if ((a.provider === undefined || a.provider === 'claude') && a.status === 'idle') return ERR_CLAUDE_UNAVAILABLE;
-    return 'a sessão não está com o plugin habblaud-mensagens conectado (npm run mod:install)';
+    if (claudeResume && (a.provider === undefined || a.provider === 'claude') && a.status === 'idle') return ERR_CLAUDE_UNAVAILABLE;
+    return tr('a sessão não está com o plugin habblaud-mensagens conectado (npm run mod:install)');
   }
   return undefined;
 }
@@ -192,8 +197,8 @@ export function parseSend(raw: unknown): { agentId: string; text: string } {
   const r = rec(raw);
   const agentId = shortStr(r?.agentId, ID_MAX);
   if (!r || !agentId || typeof r.text !== 'string') throw new InvalidRequest('esperado {agentId, text}');
-  if (!r.text.trim()) throw new InvalidRequest('a mensagem está vazia');
-  if (r.text.length > MAX_TEXT) throw new InvalidRequest('a mensagem passa de 20.000 caracteres');
+  if (!r.text.trim()) throw new InvalidRequest(tr('a mensagem está vazia'));
+  if (r.text.length > MAX_TEXT) throw new InvalidRequest(tr('a mensagem passa de 20.000 caracteres'));
   return { agentId, text: r.text };
 }
 
@@ -241,7 +246,7 @@ export class MessageRegistry {
       try {
         this.tick();
       } catch (err) {
-        log.warnOnce(`messages-tick:${errMsg(err)}`, `Mensagens: falha no relógio (${errMsg(err)}).`);
+        log.warnOnce(`messages-tick:${errMsg(err)}`, tr('Mensagens: falha no relógio ({0}).', [errMsg(err)]));
       }
     }, this.opts.tickMs ?? 500);
     this.timer.unref?.();
@@ -301,7 +306,7 @@ export class MessageRegistry {
     const demo = real ? undefined : this.opts.demoAgent?.(agentId);
     const agent = real ?? demo;
     if (!agent) return { error: 'not-found' };
-    const reason = unavailableReason(agent, real ? this.canMessage(agentId) : demo!.canMessage === true);
+    const reason = unavailableReason(agent, real ? this.canMessage(agentId) : demo!.canMessage === true, !!this.opts.claude);
     if (reason) return { error: 'unavailable', reason };
     let open = 0;
     for (const e of this.messages.values()) if (e.msg.agentId === agentId && !isFinal(e)) open++;
@@ -309,7 +314,7 @@ export class MessageRegistry {
 
     const now = this.now();
     const id = `m-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;
-    const entry: Entry = { msg: { id, agentId, status: 'queued', createdAt: now, updatedAt: now }, text, activity: describeMessage(text) };
+    const entry: Entry = { msg: { id, agentId, status: 'queued', createdAt: now, updatedAt: now }, text, activity: describeMessage(text), target: agent.sessionId };
     if (demo) entry.demo = true;
     else if (real?.provider === 'codex') entry.codex = true;
     else if (real?.provider === 'antigravity') entry.antigravity = true;
@@ -352,7 +357,7 @@ export class MessageRegistry {
     const out: InboxMessage[] = [];
     for (const e of this.messages.values()) {
       if (out.length >= INBOX_BATCH) break;
-      if (e.demo || e.claude || e.codex || e.antigravity || e.msg.agentId !== agent.id || e.msg.status !== 'queued') continue;
+      if (e.demo || e.claude || e.codex || e.antigravity || e.msg.agentId !== agent.id || e.msg.status !== 'queued' || e.target !== session) continue;
       this.setStatus(e, 'sent', now);
       e.session = session;
       e.sentAt = now;
@@ -386,7 +391,7 @@ export class MessageRegistry {
    * quem entrega é o servidor: nada sai por aqui (sem entrega dobrada).
    */
   codexPoll(raw: unknown): CodexBridgeMessage[] {
-    if (!rec(raw)) throw new InvalidRequest('esperado um objeto JSON ({})');
+    if (!rec(raw)) throw new InvalidRequest(tr('esperado um objeto JSON ({})'));
     const c = this.opts.codex;
     if (!c) return [];
     const now = this.now();
@@ -401,6 +406,7 @@ export class MessageRegistry {
     for (const e of this.messages.values()) {
       if (out.length >= INBOX_BATCH) break;
       if (!e.codex || e.msg.status !== 'queued' || busy.has(e.msg.agentId)) continue;
+      busy.add(e.msg.agentId);
       const target = this.codexTarget(e, now);
       if (!target) continue;
       this.setStatus(e, 'sent', now);
@@ -456,7 +462,9 @@ export class MessageRegistry {
         }
         continue;
       }
-      if (!present(this.opts.office.get(e.msg.agentId))) this.fail(e, now, ERR_GONE);
+      const a = this.opts.office.get(e.msg.agentId);
+      if (!present(a)) this.fail(e, now, ERR_GONE);
+      else if (e.msg.status === 'queued' && a.sessionId !== e.target) this.fail(e, now, ERR_SESSION_CHANGED);
       else if (e.msg.status === 'queued' && now - e.msg.createdAt >= this.queuedTimeoutMs) {
         this.fail(e, now, e.claude ? ERR_CLAUDE_UNAVAILABLE : e.antigravity ? ERR_ANTIGRAVITY_UNAVAILABLE : !e.codex ? ERR_NOT_FETCHED : this.opts.codex?.run ? ERR_CODEX_SLOW : ERR_CODEX_NOT_FETCHED);
       } else if (e.msg.status === 'sent' && now - (e.sentAt ?? now) >= (e.resume ? Math.max(RESUME_TIMEOUT_MS, CLAUDE_RESUME_TIMEOUT_MS, ANTIGRAVITY_RESUME_TIMEOUT_MS) + 5_000 : this.sentTimeoutMs)) {
@@ -536,6 +544,7 @@ export class MessageRegistry {
   private codexTarget(e: Entry, now: number): { account: string; codexHome: string; thread: string } | undefined {
     const a = this.opts.office.get(e.msg.agentId);
     if (!present(a)) return void this.fail(e, now, ERR_GONE);
+    if (a.sessionId !== e.target) return void this.fail(e, now, ERR_SESSION_CHANGED);
     const codexHome = this.opts.codex?.homeOf(a.account);
     if (!codexHome) return void this.fail(e, now, ERR_CODEX_HOME);
     return { account: a.account, codexHome, thread: a.sessionId };

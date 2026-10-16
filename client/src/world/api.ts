@@ -17,6 +17,24 @@ export interface WorldOptions {
   dayNight: boolean;
   /** (Opcional, aditivo) Ciclo dia/noite: automático, sempre dia ou sempre noite. Vale sobre `dayNight`. */
   daylight?: DaylightMode;
+  /** Tema visual: automático (segue o calendário; ver seasonalThemeFor), nenhum, Natal ou Halloween. */
+  theme?: OfficeTheme;
+}
+
+/** Tema que o renderer desenha: o escritório original ('none') ou um dos sazonais. */
+export type SeasonalTheme = 'none' | 'christmas' | 'halloween';
+export type OfficeTheme = 'auto' | SeasonalTheme;
+
+/**
+ * Tema desenhado numa data (hora local). No automático: Halloween de 1º a 31 de outubro, Natal de 1º de novembro a
+ * 26 de dezembro e, no resto do ano, o escritório original.
+ */
+export function seasonalThemeFor(theme: OfficeTheme | undefined, date: Date): SeasonalTheme {
+  if (theme && theme !== 'auto') return theme;
+  const month = date.getMonth();
+  if (month === 9) return 'halloween';
+  if (month === 10 || (month === 11 && date.getDate() <= 26)) return 'christmas';
+  return 'none';
 }
 
 /** Ciclo dia/noite: segue a hora local, ou fixa o dia ou a noite. */
@@ -75,6 +93,11 @@ export interface WorldApi {
   setPlayback?(p: WorldPlayback | null): void;
   /** (Opcional, aditivo) Sons do ambiente: teclado de quem trabalha à vista, elevador, rodas. */
   onSound?(cb: (cue: SoundCue) => void): () => void;
+  /**
+   * (Opcional, aditivo) Escritório fora da tela (a cena da cidade está aberta): para o desenho e o teclado da
+   * câmera; ao voltar, a simulação avança o tempo que passou (como com a aba em segundo plano).
+   */
+  setSuspended?(suspended: boolean): void;
   destroy(): void;
 }
 
@@ -131,4 +154,5 @@ export const DEFAULT_WORLD_OPTIONS: WorldOptions = {
   liveliness: 'normal',
   followSelected: false,
   dayNight: true,
+  theme: 'auto',
 };

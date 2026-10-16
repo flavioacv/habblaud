@@ -18,6 +18,7 @@ import {
   ERR_CODEX_SLOW,
   ERR_CODEX_UNAVAILABLE,
   ERR_GONE,
+  ERR_SESSION_CHANGED,
   MessageRegistry,
   PRESENCE_MS,
   QUEUED_TIMEOUT_MS,
@@ -119,8 +120,8 @@ function setup(codex?: Partial<CodexDeliveryOptions> | null) {
     messages: () => registry?.reachable() ?? new Set(),
     now: clock.now,
   });
-  office.addMain({ id: MAIN, provider: 'codex', account: '.codex', sessionId: THREAD, cwd: '/p/loja', role: 'Agente principal', startedAt: 0, status: 'idle' });
-  office.addMain({ id: OTHER, provider: 'codex', account: '.codex', sessionId: '0199b0c0-0000-7abc-8def-0123456789ab', cwd: '/p/api', role: 'Agente principal', startedAt: 0, status: 'idle' });
+  office.addMain({ id: MAIN, provider: 'codex', account: '.codex', sessionId: THREAD, cwd: '/p/loja', role: 'Agente principal', startedAt: 0, status: 'working' });
+  office.addMain({ id: OTHER, provider: 'codex', account: '.codex', sessionId: '0199b0c0-0000-7abc-8def-0123456789ab', cwd: '/p/api', role: 'Agente principal', startedAt: 0, status: 'working' });
   office.addMain({ id: CLAUDE, account: 'acc', sessionId: THREAD, cwd: '/p/loja', role: 'Agente principal', startedAt: 0, status: 'idle' });
   registry = new MessageRegistry({
     office,
@@ -165,7 +166,7 @@ describe('MessageRegistry: Codex no modo Node (o servidor roda o codex queue)', 
 
   it.runIf(FAKE_CODEX_RUNS)('falha do codex queue vira failed com a 1ª linha do stderr', async () => {
     const { office, registry } = setup({ run: runner() });
-    office.addMain({ id: `.codex:${GONE_THREAD}`, provider: 'codex', account: '.codex', sessionId: GONE_THREAD, cwd: '/p/x', role: 'Agente principal', startedAt: 0, status: 'idle' });
+    office.addMain({ id: `.codex:${GONE_THREAD}`, provider: 'codex', account: '.codex', sessionId: GONE_THREAD, cwd: '/p/x', role: 'Agente principal', startedAt: 0, status: 'working' });
     const m = await settle(registry, sent(registry.send({ agentId: `.codex:${GONE_THREAD}`, text: 'oi' })));
     expect(m).toMatchObject({ status: 'failed', error: expect.stringMatching(/^Error: .*no rollout found/) });
   });
@@ -211,6 +212,27 @@ describe('MessageRegistry: Codex no modo Node (o servidor roda o codex queue)', 
 });
 
 describe('MessageRegistry: Codex pelo auxiliar do host (Docker)', () => {
+  it('uma mensagem por agente por rodada; as seguintes esperam a confirmação sem iniciar o prazo de entrega', () => {
+    const { registry, clock } = setup();
+    registry.codexPoll({});
+    const ids = Array.from({ length: 5 }, (_, i) => sent(registry.send({ agentId: MAIN, text: `mensagem ${i}` })));
+    const other = sent(registry.send({ agentId: OTHER, text: 'outro' }));
+    expect(registry.codexPoll({}).map((m) => m.id)).toEqual([ids[0], other]);
+    expect(ids.map((id) => registry.get(id)!.status)).toEqual(['sent', 'queued', 'queued', 'queued', 'queued']);
+    expect(registry.codexPoll({})).toEqual([]);
+    clock.advance(8_000);
+    registry.codexAck({ results: [{ id: ids[0], ok: true }, { id: other, ok: true }] });
+    for (const id of ids.slice(1)) {
+      expect(registry.codexPoll({}).map((m) => m.id)).toEqual([id]);
+      clock.advance(8_000);
+      registry.tick();
+      expect(registry.get(id)!.status).toBe('sent');
+      registry.codexAck({ results: [{ id, ok: true }] });
+    }
+    expect(ids.map((id) => registry.get(id)!.status)).toEqual(['delivered', 'delivered', 'delivered', 'delivered', 'delivered']);
+    expect(registry.get(other)!.status).toBe('delivered');
+  });
+
   it('sem entregador: o Codex não recebe (com o motivo); subagente do Codex também não', () => {
     let s = setup(null);
     expect(snapAgent(s.office, MAIN)!.canMessage).toBeUndefined();
@@ -232,16 +254,18 @@ describe('MessageRegistry: Codex pelo auxiliar do host (Docker)', () => {
     const got = registry.codexPoll({});
     expect(got).toEqual([
       { id: a, account: '.codex', codexHome, thread: THREAD, text: 'um' },
-      { id: b, account: '.codex', codexHome, thread: THREAD, text: 'dois' },
       { id: c, account: '.codex', codexHome, thread: '0199b0c0-0000-7abc-8def-0123456789ab', text: 'três' },
     ]);
     expect(registry.get(a)!.status).toBe('sent');
+    expect(registry.get(b)!.status).toBe('queued');
     // A caixa de entrada do plugin e a confirmação dele não mexem nas mensagens do Codex.
     expect(registry.inbox({ session: THREAD })).toEqual([]);
     registry.ack({ session: THREAD, results: [{ id: a, ok: true }] });
     expect(registry.get(a)!.status).toBe('sent');
-    registry.codexAck({ results: [{ id: a, ok: true }, { id: b, ok: false, error: 'Error: no rollout found' }, { id: 'x', ok: true }] });
+    registry.codexAck({ results: [{ id: a, ok: true }, { id: 'x', ok: true }] });
     expect(registry.get(a)!.status).toBe('delivered');
+    expect(registry.codexPoll({})).toEqual([{ id: b, account: '.codex', codexHome, thread: THREAD, text: 'dois' }]);
+    registry.codexAck({ results: [{ id: b, ok: false, error: 'Error: no rollout found' }] });
     expect(registry.get(b)).toMatchObject({ status: 'failed', error: 'Error: no rollout found' });
     // Sem confirmação no prazo: falha; a confirmação atrasada corrige.
     clock.advance(SENT_TIMEOUT_MS);
@@ -270,5 +294,14 @@ describe('MessageRegistry: Codex pelo auxiliar do host (Docker)', () => {
     clock.advance(QUEUED_TIMEOUT_MS);
     registry.tick();
     expect(registry.get(c)).toMatchObject({ status: 'failed', error: ERR_CODEX_NOT_FETCHED });
+  });
+
+  it('troca de thread antes da busca: o auxiliar não recebe a mensagem e ela falha', () => {
+    const { office, registry } = setup();
+    registry.codexPoll({});
+    const id = sent(registry.send({ agentId: MAIN, text: 'para o thread antigo' }));
+    office.switchSession(MAIN, '0199b0c0-0000-7abc-8def-0000000000ff');
+    expect(registry.codexPoll({})).toEqual([]);
+    expect(registry.get(id)).toMatchObject({ status: 'failed', error: ERR_SESSION_CHANGED });
   });
 });

@@ -15,6 +15,8 @@ import type {
   PermissionDecision,
   PermissionRequestInfo,
   Provider,
+  PtyInfo,
+  PtyStatus,
   RoomInfo,
   ShellJob,
   SourceInfo,
@@ -29,6 +31,8 @@ import { hash32 } from '../../shared/hash';
 import { applyPermission } from '../permissions/registry';
 import type { NameStore, StoredCharacter } from './names';
 import { normalizeCwd, roomDisplayNames, SlotAllocator } from './rooms';
+import { tr } from '../../shared/i18n';
+import type { WorldMeta } from '../../shared/world/api';
 
 export const OFFLINE_GRACE_MS = 20_000;
 export const DONE_GRACE_MS = 25_000;
@@ -72,6 +76,10 @@ export interface OfficeDeps {
   messages?: () => ReadonlySet<string>;
   /** Verificação de versão nova no GitHub (ver OfficeSnapshot.meta.updates). */
   updates?: () => UpdateStatus;
+  /** Terminais interativos (PtyManager): estado do recurso e os abertos. */
+  ptys?: () => { status: PtyStatus; list: PtyInfo[] };
+  /** Habblaud World (WorldService.meta; ver OfficeSnapshot.meta.world). */
+  world?: () => WorldMeta;
   now?: () => number;
 }
 
@@ -317,7 +325,9 @@ export class Office {
     const roomId = normalizeCwd(p.cwd);
     this.ensureRoom(roomId, now);
     const chosen = this.roomCharacter(roomId, p.id, p.sessionId);
-    const person = chosen ?? this.deps.names.assign(p.sessionId, this.takenNames());
+    // A mesma sessão retomada noutro processo (ex.: "Assumir aqui") mantém o nome, mesmo com o processo antigo
+    // ainda saindo do escritório.
+    const person = chosen ?? this.deps.names.assign(p.sessionId, this.takenNames(undefined, p.sessionId));
     const info: AgentInfo = {
       id: p.id,
       kind: 'main',
@@ -341,12 +351,12 @@ export class Office {
       info.custom = true;
       if (chosen.parts) info.parts = { ...chosen.parts };
     }
-    if (p.status === 'waiting') info.waitingFor = p.waitingFor ?? 'responder no terminal';
+    if (p.status === 'waiting') info.waitingFor = p.waitingFor ?? tr('responder no terminal');
     const rec: AgentRecord = { info, history: [] };
     if (p.status === 'working') rec.turnStart = now;
     this.agents.set(p.id, rec);
     const acc = this.deps.accountName(p.account);
-    this.notice('arrive', p.id, 'info', `👋 ${info.name} chegou em ${this.roomName(roomId)}${acc ? ` (${acc})` : ''}`, roomId);
+    this.notice('arrive', p.id, 'info', tr('👋 {0} chegou em {1}{2}', [info.name, this.roomName(roomId), acc ? ` (${acc})` : '']), roomId);
     this.markDirty();
   }
 
@@ -376,7 +386,7 @@ export class Office {
     if (!rec) return;
     const info = rec.info;
     const prev = info.status;
-    const reason = status === 'waiting' ? (waitingFor ?? 'responder no terminal') : undefined;
+    const reason = status === 'waiting' ? (waitingFor ?? tr('responder no terminal')) : undefined;
     if (prev === status && info.waitingFor === reason) return;
     const now = this.now();
     if (prev !== status) {
@@ -391,7 +401,7 @@ export class Office {
     if (status === 'shell' && prev !== 'shell') {
       // Terminou o turno com shell(s) rodando: o balão (fillShellActivity) e o aviso falam da espera, não de "concluiu".
       const { label } = this.shellSummary(rec);
-      this.notice('shell', id, 'info', `⏳ ${info.name} está esperando o shell em ${room}${label ? `: ${label}` : ''}`, info.roomId, {
+      this.notice('shell', id, 'info', tr('⏳ {0} está esperando o shell em {1}{2}', [info.name, room, label ? `: ${label}` : '']), info.roomId, {
         dedupeMs: SHELL_NOTICE_DEDUPE_MS,
       });
     }
@@ -407,7 +417,7 @@ export class Office {
         this.addActivity(id, act, true);
         rec.synthWait = prevActivity ? { id: act.id, prev: prevActivity } : { id: act.id };
       }
-      this.notice('wait', id, 'alert', `✋ ${info.name} precisa de você em ${room}: ${reason}`, info.roomId);
+      this.notice('wait', id, 'alert', tr('✋ {0} precisa de você em {1}: {2}', [info.name, room, reason]), info.roomId);
     }
     if (prev === 'waiting' && status !== 'waiting' && rec.synthWait) {
       // Saiu da espera sem nada novo no transcript: volta a mostrar o que estava fazendo.
@@ -423,7 +433,7 @@ export class Office {
         this.addActivity(id, act, true);
         rec.synthDone = { id: act.id, at: now };
       }
-      this.notice('done', id, 'success', `✅ ${info.name} concluiu em ${room}`, info.roomId);
+      this.notice('done', id, 'success', tr('✅ {0} concluiu em {1}', [info.name, room]), info.roomId);
     }
     this.markDirty();
   }
@@ -500,7 +510,7 @@ export class Office {
     if (!live || outcome === 'killed') return;
     const room = this.roomName(info.roomId);
     const text =
-      outcome === 'ok' ? `✅ ${info.name}: shell terminou em ${room} — ${job.label}` : `❌ ${info.name}: shell falhou em ${room} — ${job.label}`;
+      outcome === 'ok' ? tr('✅ {0}: shell terminou em {1} — {2}', [info.name, room, job.label]) : tr('❌ {0}: shell falhou em {1} — {2}', [info.name, room, job.label]);
     this.notice('shellDone', id, outcome === 'ok' ? 'success' : 'warn', text, info.roomId, { dedupeKey: `${id}|shellDone|${job.id}` });
   }
 
@@ -564,7 +574,7 @@ export class Office {
       }
       sub.removeAt = Math.min(sub.removeAt ?? Infinity, rec.removeAt);
     }
-    this.notice('leave', id, 'info', `🚪 ${info.name} encerrou a sessão`, info.roomId);
+    this.notice('leave', id, 'info', tr('🚪 {0} encerrou a sessão', [info.name]), info.roomId);
     this.markDirty();
   }
 
@@ -622,8 +632,8 @@ export class Office {
     }
     if (opts.notify !== false) {
       const parent = info.parentId ? this.agents.get(info.parentId)?.info : undefined;
-      const what = info.title ? `“${info.title}”` : 'o trabalho';
-      this.notice('deliver', id, 'success', `📦 ${info.name} entregou ${what} para ${parent?.name ?? 'o agente principal'}`, info.roomId);
+      const what = info.title ? `“${info.title}”` : tr('o trabalho');
+      this.notice('deliver', id, 'success', tr('📦 {0} entregou {1} para {2}', [info.name, what, parent?.name ?? tr('o agente principal')]), info.roomId);
     }
     this.markDirty();
   }
@@ -745,7 +755,7 @@ export class Office {
     const info = this.agents.get(id)?.info;
     if (!info) return;
     const room = this.roomName(info.roomId);
-    const text = kind === 'question' ? `❓ ${info.name} tem uma pergunta em ${room}: ${what}` : `🔐 ${info.name} pede permissão em ${room}: ${what}`;
+    const text = kind === 'question' ? tr('❓ {0} tem uma pergunta em {1}: {2}', [info.name, room, what]) : tr('🔐 {0} pede permissão em {1}: {2}', [info.name, room, what]);
     this.notice('wait', id, 'alert', text, info.roomId);
     this.markDirty();
   }
@@ -825,7 +835,7 @@ export class Office {
     else delete info.parts;
     info.custom = true;
     const room = this.roomName(info.roomId);
-    const text = before === input.name ? `✏️ ${input.name} mudou de visual em ${room}` : `✏️ ${before} agora é ${input.name} em ${room}`;
+    const text = before === input.name ? tr('✏️ {0} mudou de visual em {1}', [input.name, room]) : tr('✏️ {0} agora é {1} em {2}', [before, input.name, room]);
     this.notice('character', id, 'info', text, info.roomId, { dedupeMs: 0 });
     this.markDirty();
     return { result: 'ok' };
@@ -882,13 +892,13 @@ export class Office {
     const key = nameKey(name);
     for (const r of this.agents.values()) {
       if (r.info.id === id || (r.removeAt !== undefined && !leaving) || nameKey(r.info.name) !== key) continue;
-      return `${r.info.name} já está no escritório em ${this.roomName(r.info.roomId)}`;
+      return tr('{0} já está no escritório em {1}', [r.info.name, this.roomName(r.info.roomId)]);
     }
     for (const a of this.demoSnap?.agents ?? []) {
-      if (nameKey(a.name) === key) return `${a.name} já está no escritório em ${this.roomName(a.roomId)}`;
+      if (nameKey(a.name) === key) return tr('{0} já está no escritório em {1}', [a.name, this.roomName(a.roomId)]);
     }
     for (const [n, room] of this.deps.names.reservedNames(roomId)) {
-      if (nameKey(n) === key) return `${n} já é o personagem de ${this.roomName(room)}`;
+      if (nameKey(n) === key) return tr('{0} já é o personagem de {1}', [n, this.roomName(room)]);
     }
     return undefined;
   }
@@ -975,12 +985,14 @@ export class Office {
     const trim = (a: AgentInfo): AgentInfo => (a.recent.length > SNAPSHOT_RECENT ? { ...a, recent: a.recent.slice(-SNAPSHOT_RECENT) } : a);
     const sessions = new Map<string, number>();
     for (const a of real) if (a.kind === 'main' && a.status !== 'offline') sessions.set(a.account, (sessions.get(a.account) ?? 0) + 1);
+    const ptys = this.deps.ptys?.();
     return {
       rev: this.rev,
       serverTime: now,
       rooms,
       agents: [...real, ...demoAgents].map(trim),
       accounts: [...this.deps.accounts(sessions), ...(this.demoSnap?.accounts ?? [])],
+      ...(ptys ? { ptys: ptys.list } : {}),
       meta: {
         demo: this.isDemo(),
         sources: this.deps.sources(),
@@ -989,15 +1001,23 @@ export class Office {
         build: this.deps.build?.(),
         terminal: this.deps.terminal === true,
         messages: this.deps.messages !== undefined,
+        ...(ptys ? { pty: ptys.status } : {}),
         updates: this.deps.updates?.(),
+        ...(this.deps.world ? { world: this.deps.world() } : {}),
       },
     };
   }
 
-  /** Nomes que o sorteio não pode dar: os de quem está no escritório (menos `exceptId`) e os escolhidos para as salas. */
-  private takenNames(exceptId?: string): Set<string> {
+  /**
+   * Nomes que o sorteio não pode dar: os de quem está no escritório (menos `exceptId` e os agentes principais da sessão
+   * `exceptSession`) e os escolhidos para as salas.
+   */
+  private takenNames(exceptId?: string, exceptSession?: string): Set<string> {
     const used = new NameSet();
-    for (const r of this.agents.values()) if (r.info.id !== exceptId) used.add(r.info.name);
+    for (const r of this.agents.values()) {
+      if (r.info.id === exceptId || (exceptSession && r.info.kind === 'main' && r.info.sessionId === exceptSession)) continue;
+      used.add(r.info.name);
+    }
     for (const a of this.demoSnap?.agents ?? []) used.add(a.name);
     for (const n of this.deps.names.reservedNames().keys()) used.add(n);
     return used;
@@ -1022,7 +1042,7 @@ export class Office {
     if (this.rooms.has(roomId)) return;
     this.rooms.set(roomId, { path: roomId, createdAt: now });
     this.recomputeRoomNames();
-    this.notice('room', roomId, 'info', `🏗️ Nova sala: ${this.roomName(roomId)}`, roomId);
+    this.notice('room', roomId, 'info', tr('🏗️ Nova sala: {0}', [this.roomName(roomId)]), roomId);
   }
 
   private recomputeRoomNames(): void {
