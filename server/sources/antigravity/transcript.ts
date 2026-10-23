@@ -139,7 +139,7 @@ export function describeAntigravityTool(rawName: string, rawArgs: unknown): { de
     case 'define_subagent': {
       const name = str(args.Name) ?? 'Subagente';
       const desc = str(args.Description);
-      return { desc: { kind: 'tool', icon: '🤖', text: desc ? `Definindo subagente ${name}: ${truncate(desc, 50)}` : `Definindo subagente ${name}` }, tool: rawName };
+      return { desc: { kind: 'delegate', icon: '🤖', text: desc ? `Definindo subagente ${name}: ${truncate(desc, 50)}` : `Definindo subagente ${name}` }, tool: rawName };
     }
     case 'manage_subagents': {
       const action = str(args.Action) ?? 'gerenciar';

@@ -64,7 +64,7 @@ describe('Antigravity transcript parser', () => {
       Description: 'Roda testes',
     });
     expect(defineSub.tool).toBe('define_subagent');
-    expect(defineSub.desc.kind).toBe('tool');
+    expect(defineSub.desc.kind).toBe('delegate');
 
     const manageSubs = describeAntigravityTool('manage_subagents', {
       Action: 'kill',
