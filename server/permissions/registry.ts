@@ -169,7 +169,7 @@ function isIndex(v: unknown): v is number {
 
 /** Pedido que se responde com `answer` (as perguntas do AskUserQuestion; o Codex não as manda pelo hook). */
 function isQuestion(info: { tool: string; provider?: string }): boolean {
-  return info.tool === ASK_TOOL && info.provider !== 'codex';
+  return (info.tool === ASK_TOOL || info.tool === 'ask_question') && info.provider !== 'codex';
 }
 
 /** O Codex não aceita interromper nem "sempre permitir" (o hook dele só aprova ou recusa com motivo). */
@@ -190,7 +190,7 @@ function askFormat(raw: unknown): Array<AskFormat | undefined> {
   if (!Array.isArray(raw)) return [];
   return raw.map((q) => {
     const r = rec(q);
-    return r ? { multiSelect: r.multiSelect === true, options: Array.isArray(r.options) ? r.options.length : 0 } : undefined;
+    return r ? { multiSelect: r.multiSelect === true || r.is_multi_select === true, options: Array.isArray(r.options) ? r.options.length : 0 } : undefined;
   });
 }
 
@@ -403,6 +403,7 @@ export class PermissionRegistry {
     let icon: string;
     let input: string | undefined;
     let inputKind: TerminalInputKind | undefined;
+    let agyDesc: ReturnType<typeof describeAntigravityTool> | undefined;
 
     if (codex) {
       const cView = codexToolView(req.tool, req.input, req.cwd);
@@ -412,7 +413,7 @@ export class PermissionRegistry {
       input = cView.input;
       inputKind = cView.inputKind;
     } else if (antigravity) {
-      const agyDesc = describeAntigravityTool(req.tool, req.input);
+      agyDesc = describeAntigravityTool(req.tool, req.input);
       const tView = toolView(agyDesc.tool, req.input, req.cwd);
       title = tView.title;
       text = agyDesc.desc.text;
@@ -429,8 +430,9 @@ export class PermissionRegistry {
       inputKind = tView.inputKind;
     }
 
-    const questions = !codex && !antigravity && 'questions' in describeTool(req.tool, req.input)
-      ? (describeTool(req.tool, req.input) as any).questions
+    const descForQuestions = antigravity && agyDesc ? agyDesc.desc : describeTool(req.tool, req.input);
+    const questions = !codex && 'questions' in descForQuestions
+      ? (descForQuestions as any).questions
       : undefined;
     const ask = isQuestion(req);
     // Pergunta: todas precisam aparecer no escritório (o hook só responde se cada uma tiver resposta).

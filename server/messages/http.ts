@@ -65,6 +65,20 @@ export function createMessageRoutes(registry: MessageRegistry): (req: IncomingMe
     sendJson(res, 200, { ok: true });
   };
 
+  const antigravityPoll = async (req: IncomingMessage, res: ServerResponse) => {
+    sendJson(res, 200, { messages: registry.antigravityPoll(await readJson(req)) });
+  };
+
+  const antigravityAck = async (req: IncomingMessage, res: ServerResponse) => {
+    registry.antigravityAck(await readJson(req));
+    sendJson(res, 200, { ok: true });
+  };
+
+  const antigravityHeartbeat = async (req: IncomingMessage, res: ServerResponse) => {
+    registry.antigravityHeartbeat(await readJson(req));
+    sendJson(res, 200, { ok: true });
+  };
+
   const post = (req: IncomingMessage, res: ServerResponse, handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>) => {
     if ((req.method ?? 'GET') !== 'POST') return methodNotAllowed(res, 'POST');
     handler(req, res).catch((err) => fail(res, err));
@@ -77,6 +91,9 @@ export function createMessageRoutes(registry: MessageRegistry): (req: IncomingMe
     if (path === '/api/codex/bridge/poll') return post(req, res, codexPoll);
     if (path === '/api/codex/bridge/ack') return post(req, res, codexAck);
     if (path === '/api/codex/bridge/heartbeat') return post(req, res, codexHeartbeat);
+    if (path === '/api/antigravity/bridge/poll') return post(req, res, antigravityPoll);
+    if (path === '/api/antigravity/bridge/ack') return post(req, res, antigravityAck);
+    if (path === '/api/antigravity/bridge/heartbeat') return post(req, res, antigravityHeartbeat);
     const m = ITEM.exec(path);
     if (!m) return sendJson(res, 404, { error: tr('rota desconhecida') });
     const method = req.method ?? 'GET';

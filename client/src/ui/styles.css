@@ -7749,6 +7749,26 @@ html.is-replay #world {
   font: inherit;
 }
 
+.ui-spawn__provider {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.ui-spawn__provider-btn {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 8px;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.ui-spawn__provider-btn.is-on {
+  background: var(--ui-accent);
+  color: #fff;
+  border-color: var(--ui-accent);
+}
+
 .ui-spawn__label {
   display: block;
   margin: 8px 0 4px;

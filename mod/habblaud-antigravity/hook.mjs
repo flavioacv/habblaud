@@ -109,8 +109,15 @@ export function decisionOutput(result) {
   if (!result || result.status !== 'decided') {
     return { decision: 'ask' };
   }
-  if (result.behavior === 'allow') {
-    return { decision: 'allow' };
+  if (result.behavior === 'allow' || result.behavior === 'answer') {
+    const out = { decision: 'allow' };
+    if (Array.isArray(result.permissionOverrides) && result.permissionOverrides.length > 0) {
+      out.permissionOverrides = result.permissionOverrides;
+    } else if (result.remember) {
+      const toolName = typeof result.tool_name === 'string' ? result.tool_name : '*';
+      out.permissionOverrides = [toolName];
+    }
+    return out;
   }
   if (result.behavior === 'deny') {
     const custom = typeof result.message === 'string' && result.message.trim() ? result.message.trim().slice(0, 1_000) : '';
@@ -161,6 +168,14 @@ async function call(base, method, path, body, timeoutMs) {
   }
 }
 
+export async function sendHookEvent(base, event, timeoutMs = 1_500) {
+  try {
+    await call(base, 'POST', '/api/antigravity/events', { event }, timeoutMs);
+  } catch {
+    // Eventos de observação nunca quebram o hook
+  }
+}
+
 export async function run(env = process.env, stdinText) {
   const startedAt = Date.now();
   try {
@@ -180,6 +195,17 @@ export async function run(env = process.env, stdinText) {
     const cfg = readConfig(env);
     const base = `http://127.0.0.1:${cfg.port}`;
     const deadline = startedAt + cfg.waitMs;
+
+    const isToolCall = isObject(input.toolCall) && typeof input.toolCall.name === 'string';
+    const isPreToolUse = isToolCall && input.error === undefined;
+
+    // Notifica o Habblaud do evento ao vivo (SessionStart, PreToolUse, Stop, etc.)
+    await sendHookEvent(base, input);
+
+    if (!isPreToolUse) {
+      // Eventos de observação (SessionStart, PostToolUse, Stop) não exigem decisão de permissão
+      return {};
+    }
 
     const reg = await call(
       base,

@@ -3,9 +3,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { NAME_MAX, parseAppearanceParts, parseCharacterName, parseSeed } from '../../shared/appearance';
 import type { AccessInfo, AgentInfo, ModSummary, OfficeSnapshot, SourceInfo, UpdateStatus } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
+import { handleAntigravityEvent } from '../antigravity/http';
 import { handleCodexEvent } from '../codex/http';
 import type { DayStatsService } from '../history/daystats';
 import type { Office } from '../model/office';
+import type { AntigravityLive } from '../sources/antigravity/live';
 import type { CodexLive } from '../sources/codex/live';
 import type { SessionLookup } from '../sources/source';
 import { isJsonContentType, isLoopbackHost } from './guard';
@@ -65,6 +67,8 @@ export interface ApiDeps {
    * não dependem da trava do terminal).
    */
   codexLive?: CodexLive;
+  /** Fonte do Antigravity ao vivo: recebe eventos de hooks (POST /api/antigravity/events, server/antigravity/http.ts). */
+  antigravityLive?: AntigravityLive;
   /** Novo agente pelo escritório (/api/spawn e, para o auxiliar do host, /api/host/spawn/*; server/spawn/spawn.ts). */
   spawn?: SpawnService;
   /** Pastas sugeridas no "Novo agente" (GET /api/spawn/folders; spawn/folders.ts): projetos recentes. */
@@ -139,7 +143,10 @@ function isMessagesPath(path: string): boolean {
     path === '/api/mod/inbox/ack' ||
     path === '/api/codex/bridge/poll' ||
     path === '/api/codex/bridge/ack' ||
-    path === '/api/codex/bridge/heartbeat'
+    path === '/api/codex/bridge/heartbeat' ||
+    path === '/api/antigravity/bridge/poll' ||
+    path === '/api/antigravity/bridge/ack' ||
+    path === '/api/antigravity/bridge/heartbeat'
   );
 }
 
@@ -496,12 +503,19 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       } else handleCodexEvent(req, res, { live: deps.codexLive, entries: () => accounts.entriesOf('codex') }).catch((err) => fail(res, err));
       return true;
     }
+    if (path === '/api/antigravity/events') {
+      if (method !== 'POST') methodNotAllowed(res, 'POST');
+      else if (!trusted(req) || (!deps.inDocker && !isLoopbackAddress(req.socket.remoteAddress))) {
+        sendJson(res, 403, { error: denied(req, tr('eventos do Antigravity só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1)')) });
+      } else handleAntigravityEvent(req, res, { live: deps.antigravityLive, entries: () => accounts.entriesOf('antigravity') }).catch((err) => fail(res, err));
+      return true;
+    }
     if (path === '/api/spawn' || path.startsWith('/api/spawn/')) {
       // Abre uma sessão nova no app do Claude: roda código no computador, então a mesma trava das mensagens.
       const spawn = deps.spawn;
       if (!spawn) sendJson(res, 403, { error: tr('novo agente pelo escritório desligado') });
       else if (!trusted(req, 'spawn')) sendJson(res, 403, { error: denied(req, tr('agentes novos só são abertos pelo próprio computador (http://localhost)')) });
-      else if (path === '/api/spawn' && isRead) sendJson(res, 200, { available: spawn.available(), mode: spawn.mode() });
+      else if (path === '/api/spawn' && isRead) sendJson(res, 200, { available: spawn.available(), mode: spawn.mode(), providers: { claude: spawn.hasClaude(), antigravity: spawn.hasAntigravity() } });
       else if (path === '/api/spawn/folders') {
         if (!isRead) methodNotAllowed(res, 'GET');
         else (deps.spawnFolders ?? (async () => []))().then((folders) => sendJson(res, 200, { folders }), (err) => fail(res, err));

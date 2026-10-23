@@ -6,7 +6,7 @@ import { mkdirSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkMessage, dictationRound, filesRound, httpPost, parseArgs, round, spawnRound, type Post } from '../../scripts/codex-bridge';
+import { antigravityRound, checkMessage, dictationRound, filesRound, httpPost, parseArgs, round, spawnRound, type Post } from '../../scripts/codex-bridge';
 import { spawnUrl } from '../spawn/spawn';
 import { AccountsService } from '../accounts/service';
 import { createApiHandler } from '../http/app';
@@ -278,5 +278,36 @@ describe('spawnRound (agentes novos pelo auxiliar)', () => {
   it('Habblaud fora do ar ou recusando', async () => {
     expect(await spawnRound(async () => null, async () => ({ ok: true }))).toEqual({ state: 'down' });
     expect(await spawnRound(async () => ({ status: 403, json: { error: 'x' } }), async () => ({ ok: true }))).toEqual({ state: 'refused', status: 403 });
+  });
+
+  it('antigravityRound: busca mensagens do Antigravity, executa o runner e confirma o resultado', async () => {
+    const calls: Array<[string, unknown]> = [];
+    const post: Post = async (path, body) => {
+      calls.push([path, body]);
+      if (path === '/api/antigravity/bridge/poll') {
+        return {
+          status: 200,
+          json: {
+            messages: [
+              { id: 'm1', account: 'gemini', conversationId: 'c1', text: 'olá', resume: true },
+            ],
+          },
+        };
+      }
+      return { status: 200, json: { ok: true } };
+    };
+
+    const ran: any[] = [];
+    const r = await antigravityRound(
+      post,
+      async (job) => {
+        ran.push(job);
+        return { ok: true };
+      },
+    );
+
+    expect(r).toEqual({ state: 'ok', results: [{ id: 'm1', ok: true }] });
+    expect(ran).toEqual([{ conversationId: 'c1', text: 'olá', resume: true }]);
+    expect(calls[1]).toEqual(['/api/antigravity/bridge/ack', { results: [{ id: 'm1', ok: true }] }]);
   });
 });

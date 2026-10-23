@@ -1758,7 +1758,14 @@ export const EN: Readonly<Record<string, string>> = {
 
   // server/messages/http.ts
   "já há {0} mensagens esperando a entrega para este agente: espere a sessão buscar": "there are already {0} messages waiting for delivery to this agent: wait for the session to fetch them",
-  "mensagem desconhecida: ela já foi resolvida há mais de 10 min ou o Habblaud reiniciou": "unknown message: it was resolved more than 10 min ago or Habblaud restarted",
+  "mensagem desconhecida: ela já foi resolvida há mais de 35 min ou o Habblaud reiniciou": "unknown message: it was resolved more than 35 min ago or Habblaud restarted",
+  "Nova tarefa": "New task",
+  "Eventos do Antigravity: falha ao aplicar evento ({0}).": "Antigravity events: failed to apply event ({0}).",
+  "eventos do Antigravity só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1)": "Antigravity events are only accepted from this computer (http://localhost or http://127.0.0.1)",
+  "o executável do Antigravity (agy) não foi encontrado": "the Antigravity executable (agy) was not found",
+  "Começa na hora uma sessão do Antigravity CLI no computador, na pasta escolhida; as permissões chegam aqui.": "Starts an Antigravity CLI session right away on your computer in the chosen folder; permissions arrive here.",
+  "✓ mensagem enviada ao Antigravity {0}…": "✓ message sent to Antigravity {0}…",
+  "Antigravity habilitado com {0} (mensagens e agentes novos).": "Antigravity enabled with {0} (messages and new agents).",
 
   // server/messages/registry.ts
   "a sessão não buscou a mensagem: o plugin habblaud-mensagens está instalado e a sessão aberta?": "the session didn't fetch the message: is the habblaud-mensagens plugin installed and the session open?",

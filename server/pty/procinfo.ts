@@ -26,10 +26,10 @@ const FILETIME_EPOCH_MS = 11_644_473_600_000;
 const START_BEFORE_MS = 120_000;
 const START_AFTER_MS = 5_000;
 
-/** Executável do Claude Code: `claude`, o Node/Bun que roda o pacote npm ou o binário nativo com nome de versão. */
+/** Executável do Claude Code ou Antigravity CLI: `claude`, `agy`, `antigravity`, o Node/Bun que roda o pacote npm ou o binário nativo com nome de versão. */
 export function looksLikeClaude(name: string): boolean {
   const n = basename(name.trim()).replace(/\.exe$/i, '');
-  return /^(claude|node|bun)$/i.test(n) || /^\d+\.\d+\.\d+/.test(n);
+  return /^(claude|node|bun|agy|antigravity)$/i.test(n) || /^\d+\.\d+\.\d+/.test(n);
 }
 
 /** O processo vivo `info` é o mesmo que gravou `reg`? */

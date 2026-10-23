@@ -21,8 +21,9 @@ import { isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isClaudeDir } from '../server/accounts/detect';
 import { createCodexQueueRunner, findCodexBin, THREAD_ID, type CodexQueueResult, type CodexQueueRunner } from '../server/messages/codex';
+import { createAntigravityMessageRunner, findAntigravityBin, type AntigravityMessageRunner, type AntigravityMessageResult } from '../server/messages/antigravity';
 import { tr } from '../shared/i18n';
-import { createCliRunner, createOpener, folderProblem, launch, parseSpawn, type CliRunner, type Opener, type SpawnHow } from '../server/spawn/spawn';
+import { createAntigravityCliRunner, createCliRunner, createOpener, folderProblem, launch, parseSpawn, type CliRunner, type Opener, type SpawnHow } from '../server/spawn/spawn';
 import { runnableClaudeBin } from '../server/claude-bin';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_SPAWN, attachmentsRoot, promptWithAttachments, safeFileName, writeAttachments, type Attachment } from '../server/spawn/attachments';
 import { createWhisperTranscriber, findWhisper, type Transcriber } from '../server/dictation/whisper';
@@ -187,6 +188,58 @@ export async function round(post: Post, run: CodexQueueRunner, log: (line: strin
   return { state: 'ok', results };
 }
 
+/** Uma rodada do Antigravity: busca mensagens e entrega via `agy agentapi send-message` ou retomada headless. */
+export async function antigravityRound(
+  post: Post,
+  run: AntigravityMessageRunner,
+  log: (line: string) => void = () => {},
+): Promise<RoundResult> {
+  const polled = await post('/api/antigravity/bridge/poll', {});
+  if (!polled) return { state: 'down' };
+  const list = rec(polled.json)?.messages;
+  if (polled.status !== 200 || !Array.isArray(list)) {
+    const error = rec(polled.json)?.error;
+    return { state: 'refused', status: polled.status, ...(typeof error === 'string' ? { error } : {}) };
+  }
+  const results: BridgeResult[] = [];
+  for (const raw of list) {
+    const r_obj = rec(raw);
+    const id = typeof r_obj?.id === 'string' ? r_obj.id : '';
+    const conversationId = typeof r_obj?.conversationId === 'string' ? r_obj.conversationId : '';
+    const text = typeof r_obj?.text === 'string' ? r_obj.text : '';
+    const resume = r_obj?.resume === true;
+    const cwd = typeof r_obj?.cwd === 'string' ? r_obj.cwd : undefined;
+    const antigravityHome = typeof r_obj?.antigravityHome === 'string' ? r_obj.antigravityHome : undefined;
+
+    if (!id || !conversationId) continue;
+    let r: AntigravityMessageResult;
+    let heartbeatBusy = false;
+    const heartbeat = resume ? setInterval(() => {
+      if (heartbeatBusy) return;
+      heartbeatBusy = true;
+      void post('/api/antigravity/bridge/heartbeat', {}).finally(() => { heartbeatBusy = false; });
+    }, 3_000) : undefined;
+    try {
+      r = await run({ conversationId, text, ...(resume ? { resume: true, cwd, antigravityHome } : {}) });
+    } catch (err) {
+      r = { ok: false, error: String(err) };
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+    }
+    const result = r.ok ? { id, ok: true } : { id, ok: false, error: r.error };
+    results.push(result);
+    await post('/api/antigravity/bridge/ack', { results: [result] });
+    log(
+      r.ok
+        ? resume
+          ? `✓ retomada concluída da conversa Antigravity ${conversationId.slice(0, 8)}…`
+          : tr('✓ mensagem enviada ao Antigravity {0}…', [conversationId.slice(0, 8)])
+        : `✗ conversa Antigravity ${conversationId.slice(0, 8)}…: ${r.error}`,
+    );
+  }
+  return { state: 'ok', results };
+}
+
 /** Anexos de um pedido vindo do Habblaud: nomes seguros, base64 válido, tamanho e quantidade no limite. */
 export function checkFiles(raw: unknown): Attachment[] | { error: string } {
   if (raw === undefined) return [];
@@ -234,6 +287,7 @@ export async function spawnRound(
   problem: (folder: string) => string | undefined = folderProblem,
   write: (id: string, files: readonly Attachment[]) => string[] = (id, files) => writeAttachments(attachmentsRoot(), id, files),
   cli?: CliRunner,
+  antigravityCli?: CliRunner,
 ): Promise<RoundResult> {
   const polled = await post('/api/host/spawn/poll', {});
   if (!polled) return { state: 'down' };
@@ -254,7 +308,8 @@ export async function spawnRound(
     let r: { ok: true; how: SpawnHow; note?: string } | { ok: false; error: string };
     try {
       const paths = write(id, files);
-      r = await launch({ folder: req.folder, prompt: promptWithAttachments(req.prompt, paths) }, open, cli);
+      const spawnReq = { folder: req.folder, prompt: promptWithAttachments(req.prompt, paths), ...(req.provider ? { provider: req.provider } : {}) };
+      r = await launch(spawnReq, open, cli, antigravityCli);
     } catch (err) {
       r = { ok: false, error: String((err as Error)?.message ?? err) };
     }
@@ -357,6 +412,9 @@ async function main(): Promise<void> {
   const open = createOpener();
   const claudeBin = runnableClaudeBin(process.env);
   const cli = claudeBin ? createCliRunner(claudeBin) : undefined;
+  const agyBin = findAntigravityBin(process.env);
+  const antigravityRunner = agyBin ? createAntigravityMessageRunner(agyBin) : undefined;
+  const antigravityCli = agyBin ? createAntigravityCliRunner(agyBin) : undefined;
   const post = httpPost(parsed.port);
   const log = (line: string) => console.log(`[codex-bridge] ${line}`);
   log(
@@ -364,6 +422,9 @@ async function main(): Promise<void> {
       ? tr('Entregando as mensagens do Habblaud (http://127.0.0.1:{0}) às sessões do Codex com {1}, e começando os agentes novos pedidos no escritório. Ctrl+C para parar.', [parsed.port, bin])
       : tr('Sem o Codex (codex no PATH ou HABBLAUD_CODEX_BIN): só começo os agentes novos pedidos no Habblaud (http://127.0.0.1:{0}). Ctrl+C para parar.', [parsed.port]),
   );
+  if (agyBin) {
+    log(tr('Antigravity habilitado com {0} (mensagens e agentes novos).', [agyBin]));
+  }
   log(cli ? tr('Agentes novos rodam em segundo plano com {0} --bg (pasta confiável; senão, no app do Claude).', [claudeBin]) : tr('Sem o claude no PATH (ou HABBLAUD_CLAUDE_BIN): agentes novos abrem no app do Claude e esperam o Enter.'));
   const whisper = findWhisper(process.env);
   let transcribe: Transcriber | undefined;
@@ -390,8 +451,11 @@ async function main(): Promise<void> {
   let spawned: RoundResult = { state: 'ok', results: [] };
   for (;;) {
     if (Date.now() >= spawnRetryAt) {
-      spawned = await spawnRound(post, open, log, undefined, undefined, cli);
+      spawned = await spawnRound(post, open, log, undefined, undefined, cli, antigravityCli);
       if (spawned.state === 'refused') spawnRetryAt = Date.now() + REFUSED_RETRY_MS;
+    }
+    if (antigravityRunner) {
+      await antigravityRound(post, antigravityRunner, log);
     }
     const r = run ? await round(post, run, log) : spawned;
     const state =

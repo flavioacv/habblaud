@@ -156,4 +156,66 @@ describe('AntigravitySource', () => {
     expect(addedMain).toBeNull();
     source.stop();
   });
+
+  it('aplica eventos de hook ao vivo (SessionStart e Stop) instantaneamente', () => {
+    const tmp = tempDir();
+    cleanups.push(tmp.cleanup);
+
+    const agyDir = join(tmp.dir, 'antigravity-cli');
+    mkdirSync(join(agyDir, 'presence'), { recursive: true });
+    mkdirSync(join(agyDir, 'brain', 'conv-live', '.system_generated', 'logs'), { recursive: true });
+    writeFileSync(join(agyDir, 'history.jsonl'), '');
+    writeFileSync(join(agyDir, 'brain', 'conv-live', '.system_generated', 'logs', 'transcript.jsonl'), '{"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","content":"iniciando"}\n');
+
+    let addedMain: any = null;
+    let currentStatus: string | null = null;
+    const office = {
+      beginBoot: () => {},
+      endBoot: () => {},
+      addMain: (m: any) => { addedMain = m; },
+      has: () => true,
+      addActivity: () => {},
+      setStatus: (_id: string, s: string) => { currentStatus = s; },
+      applyTranscript: () => {},
+      closeMain: () => {},
+    } as any;
+
+    const accounts = {
+      setProviderAccounts: (_provider: string, list: any[]) =>
+        list.map((item, idx) => ({ id: `antigravity-${idx}`, dir: item.dir, detected: item.detected })),
+      setUsage: () => {},
+    } as any;
+
+    const source = new AntigravitySource({
+      accounts,
+      office,
+      dirs: [agyDir],
+      home: tmp.dir,
+      env: {},
+    });
+
+    source.start();
+    expect(addedMain).toBeNull();
+
+    // 1. Recebe SessionStart via hook
+    const okStart = source.applyHookEvent('antigravity-0', {
+      conversationId: 'conv-live',
+      hook_event_name: 'SessionStart',
+      workspacePaths: ['/Users/flavio/workspace/app'],
+    });
+    expect(okStart).toBe(true);
+    expect(addedMain).toBeDefined();
+    expect(addedMain?.cwd).toBe('/Users/flavio/workspace/app');
+    expect(addedMain?.status).toBe('working');
+
+    // 2. Recebe Stop via hook
+    const okStop = source.applyHookEvent('antigravity-0', {
+      conversationId: 'conv-live',
+      hook_event_name: 'Stop',
+    });
+    expect(okStop).toBe(true);
+    expect(currentStatus).toBe('idle');
+
+    source.stop();
+  });
 });

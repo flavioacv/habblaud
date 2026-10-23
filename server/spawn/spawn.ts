@@ -11,7 +11,7 @@
 // Anexos (spawn/attachments.ts): quem roda grava os arquivos em ~/.habblaud/attachments/ e põe os caminhos no fim
 // do pedido. Sem shell (execFile), com prazo, e o pedido vai depois de `--` (nunca vira opção nem subcomando).
 // Node puro e sem dependências: também é importado pelo auxiliar do host (via tsx).
-import { execFile } from 'node:child_process';
+import { execFile, spawn as cpSpawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
@@ -43,6 +43,7 @@ const ERROR_MAX = 300;
 export interface SpawnRequest {
   folder: string;
   prompt: string;
+  provider?: 'claude' | 'antigravity';
 }
 
 export type SpawnStatus = 'queued' | 'sent' | 'opened' | 'failed';
@@ -63,7 +64,7 @@ export interface SpawnInfo {
 export type OpenResult = { ok: true } | { ok: false; error: string };
 export type Opener = (url: string) => Promise<OpenResult>;
 export type CliResult = { ok: true; id: string } | { ok: false; error: string };
-/** Roda o pedido como sessão em segundo plano do Claude Code. */
+/** Roda o pedido como sessão em segundo plano do Claude Code ou Antigravity. */
 export type CliRunner = (req: SpawnRequest) => Promise<CliResult>;
 export type LaunchResult = { ok: true; how: SpawnHow; note?: string } | { ok: false; error: string };
 
@@ -72,11 +73,12 @@ export function parseSpawn(raw: unknown): SpawnRequest | { error: string } {
   const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const folder = typeof r.folder === 'string' ? r.folder.trim() : '';
   const prompt = typeof r.prompt === 'string' ? r.prompt.replace(/\s+$/, '') : '';
+  const provider = r.provider === 'antigravity' ? 'antigravity' : r.provider === 'claude' ? 'claude' : undefined;
   if (!folder || folder.length > FOLDER_MAX || folder.includes('\0') || !(isAbsolute(folder) || /^[A-Za-z]:[\\/]/.test(folder))) {
     return { error: tr('escolha uma pasta (caminho absoluto, ex.: /Users/voce/projeto)') };
   }
   if (prompt.length > PROMPT_MAX || prompt.includes('\0')) return { error: tr('o pedido passa de {0} caracteres', [PROMPT_MAX]) };
-  return { folder, prompt };
+  return { folder, prompt, ...(provider ? { provider } : {}) };
 }
 
 /** O link que o app do Claude entende (claude://code/new; `q` = pedido já escrito). */
@@ -115,6 +117,27 @@ export function createCliRunner(bin: string, timeoutMs = CLI_TIMEOUT_MS): CliRun
     });
 }
 
+/** `agy [prompt]` na pasta do pedido de forma desacoplada em segundo plano. */
+export function createAntigravityCliRunner(bin: string): CliRunner {
+  return (req) =>
+    new Promise((ok) => {
+      try {
+        const args = req.prompt.trim() ? [req.prompt] : [];
+        const child = cpSpawn(bin, args, {
+          cwd: req.folder,
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        child.unref();
+        ok({ ok: true, id: String(child.pid ?? 'antigravity') });
+      } catch (err) {
+        const msg = String((err as Error)?.message ?? err);
+        ok({ ok: false, error: msg.slice(0, ERROR_MAX) });
+      }
+    });
+}
+
 /** Frase para a tela quando o `claude --bg` não rodou. */
 export function cliNote(error: string): string {
   return /not trusted/i.test(error)
@@ -123,7 +146,24 @@ export function cliNote(error: string): string {
 }
 
 /** Roda em segundo plano; se não der, abre a tela do app preenchida (e diz por quê). */
-export async function launch(req: SpawnRequest, open: Opener, cli?: CliRunner): Promise<LaunchResult> {
+export async function launch(
+  req: SpawnRequest,
+  open: Opener,
+  cli?: CliRunner,
+  antigravityCli?: CliRunner,
+): Promise<LaunchResult> {
+  if (req.provider === 'antigravity') {
+    if (!antigravityCli) {
+      return { ok: false, error: tr('o executável do Antigravity (agy) não foi encontrado') };
+    }
+    const r = await antigravityCli(req).catch((err: unknown) => ({
+      ok: false as const,
+      error: String((err as Error)?.message ?? err),
+    }));
+    if (r.ok) return { ok: true, how: 'cli' };
+    return { ok: false, error: r.error.slice(0, ERROR_MAX) };
+  }
+
   let note: string | undefined;
   if (cli) {
     const r = await cli(req).catch((err: unknown) => ({ ok: false as const, error: String((err as Error)?.message ?? err) }));
@@ -175,6 +215,8 @@ export interface SpawnServiceOptions {
   opener?: Opener;
   /** Modo Node: roda em segundo plano antes de cair no app (ausente = só o app). */
   cli?: CliRunner;
+  /** Modo Node: roda em segundo plano sessão do Antigravity CLI (agy). */
+  antigravityCli?: CliRunner;
   /** Confere a pasta antes de abrir no modo direto (padrão: statSync). */
   folderProblem?: (folder: string) => string | undefined;
   /** Anexos enviados antes do pedido (POST /api/spawn/attachments); ausente = pedidos sem anexos. */
@@ -198,11 +240,19 @@ export class SpawnService {
 
   /** Dá para abrir agora: modo direto, ou o auxiliar do host passou há pouco. */
   available(): boolean {
-    return !!this.opts.opener || this.now() - this.hostSeenAt <= HOST_PRESENCE_MS;
+    return !!this.opts.opener || !!this.opts.antigravityCli || this.now() - this.hostSeenAt <= HOST_PRESENCE_MS;
+  }
+
+  hasClaude(): boolean {
+    return !!this.opts.cli || !!this.opts.opener;
+  }
+
+  hasAntigravity(): boolean {
+    return !!this.opts.antigravityCli;
   }
 
   mode(): 'direct' | 'host' {
-    return this.opts.opener ? 'direct' : 'host';
+    return this.opts.opener || this.opts.antigravityCli ? 'direct' : 'host';
   }
 
   submit(raw: unknown): SpawnSubmit {
@@ -226,7 +276,7 @@ export class SpawnService {
     const info: SpawnInfo = { id: this.opts.newId?.() ?? randomUUID(), folder: req.folder, status: 'queued' };
     const entry: Entry = { info, req, files, at: this.now() };
     this.entries.set(info.id, entry);
-    if (this.opts.opener) void this.openDirect(entry, this.opts.opener);
+    if (this.opts.opener || this.opts.antigravityCli) void this.openDirect(entry, this.opts.opener);
     return { spawn: { ...info } };
   }
 
@@ -247,7 +297,13 @@ export class SpawnService {
       e.at = this.now();
       const files = e.files.map((f) => ({ name: f.name, type: f.type, data: f.data.toString('base64') }));
       this.dropFiles(e);
-      out.push({ id: e.info.id, folder: e.req.folder, prompt: e.req.prompt, files });
+      out.push({
+        id: e.info.id,
+        folder: e.req.folder,
+        prompt: e.req.prompt,
+        ...(e.req.provider ? { provider: e.req.provider } : {}),
+        files,
+      });
     }
     return out;
   }
@@ -268,7 +324,7 @@ export class SpawnService {
     }
   }
 
-  private async openDirect(e: Entry, opener: Opener): Promise<void> {
+  private async openDirect(e: Entry, opener?: Opener): Promise<void> {
     e.info.status = 'sent';
     const problem = (this.opts.folderProblem ?? folderProblem)(e.req.folder);
     if (problem) return this.resolve(e, { ok: false, error: problem });
@@ -280,8 +336,12 @@ export class SpawnService {
     } finally {
       this.dropFiles(e);
     }
-    const req = { folder: e.req.folder, prompt: promptWithAttachments(e.req.prompt, paths) };
-    this.resolve(e, await launch(req, opener, this.opts.cli));
+    const req: SpawnRequest = {
+      folder: e.req.folder,
+      prompt: promptWithAttachments(e.req.prompt, paths),
+      ...(e.req.provider ? { provider: e.req.provider } : {}),
+    };
+    this.resolve(e, await launch(req, opener ?? (async () => ({ ok: false, error: tr('falhou ao abrir o app') })), this.opts.cli, this.opts.antigravityCli));
   }
 
   /** Os anexos do pedido saem da memória (e do teto do AttachmentStore). */

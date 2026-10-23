@@ -272,4 +272,61 @@ describe('rotas', () => {
     srv = await serveMessages({ enabled: false, demo: true });
     expect((await snapshot(srv)).agents.filter((a) => a.canMessage)).toEqual([]);
   });
+
+  it('bridge do Antigravity: entrega mensagens destinadas a sessões Antigravity via poll e ack', async () => {
+    srv = await serveMessages({
+      registry: {
+        antigravity: {
+          homeOf: () => '/home/.gemini',
+        },
+      },
+    });
+
+    const AGY_ID = 'antigravity:main-1';
+    const AGY_CONV = '11111111-2222-3333-4444-555555555555';
+    srv.office.addMain({
+      id: AGY_ID,
+      account: 'gemini-account',
+      sessionId: AGY_CONV,
+      provider: 'antigravity',
+      cwd: '/p/projeto-agy',
+      role: 'Agente Antigravity',
+      startedAt: Date.now(),
+      status: 'idle',
+    });
+
+    // 1. O auxiliar do host marca presença chamando poll
+    const p1 = await post(srv, '/api/antigravity/bridge/poll', {});
+    expect(p1.status).toBe(200);
+
+    // 2. Agora o agente Antigravity pode receber mensagens
+    const canMessage = (await snapshot(srv)).agents.find((a) => a.id === AGY_ID)?.canMessage;
+    expect(canMessage).toBe(true);
+
+    // 3. Usuário envia mensagem
+    const created = await post(srv, '/api/messages', { agentId: AGY_ID, text: 'refatore o código' });
+    expect(created.status).toBe(201);
+    const msg = created.json as OutboxMessage;
+
+    // 4. O bridge busca a mensagem via poll
+    const p2 = (await post(srv, '/api/antigravity/bridge/poll', {})).json as { messages: any[] };
+    expect(p2.messages).toHaveLength(1);
+    expect(p2.messages[0]).toMatchObject({
+      id: msg.id,
+      account: 'gemini-account',
+      conversationId: AGY_CONV,
+      text: 'refatore o código',
+      resume: true,
+    });
+
+    // 5. O bridge confirma a entrega via ack
+    const ack = await post(srv, '/api/antigravity/bridge/ack', {
+      results: [{ id: msg.id, ok: true }],
+    });
+    expect(ack.status).toBe(200);
+
+    // 6. A mensagem consta como entregue (delivered)
+    const done = (await request(srv.base, `/api/messages/${encodeURIComponent(msg.id)}`)).json as OutboxMessage;
+    expect(done.status).toBe('delivered');
+  });
 });

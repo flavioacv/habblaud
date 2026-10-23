@@ -125,12 +125,15 @@ export class SpawnPanel {
   private readonly dictate: DictationButton;
   private readonly submitBtn: HTMLButtonElement;
   private readonly status: HTMLElement;
+  private readonly providerGroup: HTMLElement;
+  private readonly hintText: HTMLElement;
   private anchor?: HTMLElement;
   private busy = false;
   private folders: FolderOption[] = [];
   private selected = '';
   private typing = false;
   private files: PendingFile[] = [];
+  private selectedProvider: 'claude' | 'antigravity' = 'claude';
 
   constructor(private readonly ctx: UiContext) {
     this.folderList = h('div', { class: 'ui-spawn__folders', role: 'radiogroup', attrs: { 'aria-label': tr('Projetos recentes') } });
@@ -166,6 +169,11 @@ export class SpawnPanel {
     this.fileList = h('ul', { class: 'ui-spawn__files', attrs: { 'aria-label': tr('Anexos') } });
     this.submitBtn = h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow ui-spawn__go', type: 'button', on: { click: () => void this.submit() } }, tr('Começar'));
     this.status = h('p', { class: 'ui-rename__hint ui-spawn__status', attrs: { role: 'status', 'aria-live': 'polite' } });
+    this.providerGroup = h('div', { class: 'ui-spawn__provider', hidden: true });
+    this.hintText = h('p', {
+      class: 'ui-rename__hint',
+      text: tr('Começa na hora uma sessão do Claude Code em segundo plano no computador, na pasta escolhida; as permissões chegam aqui. Pasta que o Claude Code ainda não conhece abre no app do Claude e espera o Enter lá. Anexos vão para ~/.habblaud/attachments e o pedido leva os caminhos.'),
+    });
     for (const field of [this.folder, this.prompt] as HTMLElement[]) {
       field.addEventListener('keydown', (e: KeyboardEvent) => {
         e.stopPropagation();
@@ -188,6 +196,7 @@ export class SpawnPanel {
       h(
         'div',
         { class: 'ui-set-group ui-spawn__body' },
+        this.providerGroup,
         h('p', { class: 'ui-spawn__label', attrs: { id: 'ui-spawn-folders-label' }, text: tr('Projeto') }),
         this.folderList,
         this.otherBtn,
@@ -196,7 +205,7 @@ export class SpawnPanel {
         this.prompt,
         h('div', { class: 'ui-spawn__tools' }, this.dictate.el, attachBtn, this.fileInput),
         this.fileList,
-        h('p', { class: 'ui-rename__hint', text: tr('Começa na hora uma sessão do Claude Code em segundo plano no computador, na pasta escolhida; as permissões chegam aqui. Pasta que o Claude Code ainda não conhece abre no app do Claude e espera o Enter lá. Anexos vão para ~/.habblaud/attachments e o pedido leva os caminhos.') }),
+        this.hintText,
         this.submitBtn,
         this.status,
       ),
@@ -221,6 +230,7 @@ export class SpawnPanel {
     // Primeiro com o que o escritório já sabe; a lista do servidor (histórico) chega logo depois.
     if (!this.folders.length) this.setFolders(spawnFolders(this.ctx.store.snapshot).map((path) => ({ path, name: path.split(/[\\/]/).pop() || path, lastAt: 0 })));
     void this.loadFolders();
+    void this.loadProviders();
     void this.checkDictation();
     if (!this.busy) setText(this.status, '');
     const r = anchor.getBoundingClientRect();
@@ -246,6 +256,73 @@ export class SpawnPanel {
       if (Array.isArray(r.folders) && r.folders.length) this.setFolders(r.folders);
     } catch {
       // fica a lista das salas
+    }
+  }
+
+  private async loadProviders(): Promise<void> {
+    try {
+      const r = await api<{ available: boolean; mode: string; providers?: { claude?: boolean; antigravity?: boolean } }>('/api/spawn');
+      const hasClaude = r.providers?.claude !== false;
+      const hasAgy = !!r.providers?.antigravity;
+      if (hasClaude && hasAgy) {
+        setHidden(this.providerGroup, false);
+        this.renderProviders();
+      } else {
+        setHidden(this.providerGroup, true);
+        if (hasAgy && !hasClaude) this.selectedProvider = 'antigravity';
+        else this.selectedProvider = 'claude';
+        this.updateHint();
+      }
+    } catch {
+      setHidden(this.providerGroup, true);
+    }
+  }
+
+  private renderProviders(): void {
+    const claudeBtn = h(
+      'button',
+      {
+        class: `ui-btn ui-spawn__provider-btn${this.selectedProvider === 'claude' ? ' is-on' : ''}`,
+        type: 'button',
+        on: {
+          click: () => {
+            this.selectedProvider = 'claude';
+            this.renderProviders();
+            this.updateHint();
+          },
+        },
+      },
+      'Claude Code',
+    );
+    const agyBtn = h(
+      'button',
+      {
+        class: `ui-btn ui-spawn__provider-btn${this.selectedProvider === 'antigravity' ? ' is-on' : ''}`,
+        type: 'button',
+        on: {
+          click: () => {
+            this.selectedProvider = 'antigravity';
+            this.renderProviders();
+            this.updateHint();
+          },
+        },
+      },
+      'Antigravity',
+    );
+    this.providerGroup.replaceChildren(claudeBtn, agyBtn);
+  }
+
+  private updateHint(): void {
+    if (this.selectedProvider === 'antigravity') {
+      setText(
+        this.hintText,
+        tr('Começa na hora uma sessão do Antigravity CLI no computador, na pasta escolhida; as permissões chegam aqui.'),
+      );
+    } else {
+      setText(
+        this.hintText,
+        tr('Começa na hora uma sessão do Claude Code em segundo plano no computador, na pasta escolhida; as permissões chegam aqui. Pasta que o Claude Code ainda não conhece abre no app do Claude e espera o Enter lá. Anexos vão para ~/.habblaud/attachments e o pedido leva os caminhos.'),
+      );
     }
   }
 
@@ -369,7 +446,12 @@ export class SpawnPanel {
       let info = await api<SpawnInfo>('/api/spawn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder, prompt: this.prompt.value, ...(ids.length ? { attachments: ids } : {}) }),
+        body: JSON.stringify({
+          folder,
+          prompt: this.prompt.value,
+          provider: this.selectedProvider,
+          ...(ids.length ? { attachments: ids } : {}),
+        }),
       });
       const end = Date.now() + WAIT_MS;
       while ((info.status === 'queued' || info.status === 'sent') && Date.now() < end) {

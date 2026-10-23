@@ -10,6 +10,18 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Antigravity: suporte completo a subagentes, perguntas interativas (`ask_question`), eventos do GitHub e ferramentas modernas.**
+  O Habblaud agora exibe visualmente os subagentes invocados pelo Antigravity CLI no escritório, reconhece ferramentas atuais (`read_file`, `edit_file`, `write_file`, `define_subagent`, `manage_subagents`, etc.), detecta ações no GitHub via `run_command` e permite responder perguntas interativas de múltipla escolha diretamente pela interface do escritório.
+- **Antigravity: eventos de ciclo de vida ao vivo via hooks (`POST /api/antigravity/events`).**
+  Sessões do Antigravity agora são detectadas instantaneamente no escritório com o workspace correto sem depender de comandos do sistema operacional como `ps` ou `lsof`, sincronizando início e término do agente em tempo real. O instalador (`npm run antigravity:install`) passa a registrar `SessionStart`, `PreToolUse` e `Stop`. Suporte a tokens de quota via variáveis de ambiente (`ANTIGRAVITY_TOKEN`).
+- **Antigravity: criação de novos agentes ("+ Novo Agente") pelo escritório.**
+  O botão "+ Novo Agente" na barra superior agora permite selecionar o provedor (Claude Code ou Antigravity CLI), disparando uma nova sessão desacoplada no computador via `agy` na pasta escolhida com os pedidos informados.
+- **Antigravity: suporte a bridge no Docker (`scripts/codex-bridge.ts`).**
+  O auxiliar do host que roda no Mac passa a buscar mensagens para sessões Antigravity (`/api/antigravity/bridge/poll` e `ack`) e a executar novos agentes Antigravity quando o Habblaud roda em container Docker.
+
+
 ## [1.0.3] - 2026-10-16
 
 ### Corrigido

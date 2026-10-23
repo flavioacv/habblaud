@@ -9,6 +9,7 @@ import type { AccountEntry, AccountsService } from '../../accounts/service';
 import { errMsg, log } from '../../log';
 import type { Office, TranscriptSummary } from '../../model/office';
 import type { AgentSource } from '../source';
+import type { AntigravityLive } from './live';
 import { FileTail } from '../tail';
 import type { TerminalParser } from '../terminal';
 import type { AgentStatus, SourceInfo } from '../../../shared/types';
@@ -120,7 +121,7 @@ interface ConversationTracker {
   lastSeenAt: number;
 }
 
-export class AntigravitySource implements AgentSource {
+export class AntigravitySource implements AgentSource, AntigravityLive {
   readonly provider = 'antigravity' as const;
   private readonly dirs: string[];
   private readonly now: () => number;
@@ -205,6 +206,72 @@ export class AntigravitySource implements AgentSource {
       this.quotaTimer = null;
     }
     this.trackers.clear();
+  }
+
+  /** Aplica um evento de hook do Antigravity ao vivo (SessionStart, PreToolUse, PostToolUse, Stop). */
+  applyHookEvent(account: string | undefined, event: Record<string, unknown>): boolean {
+    const convId = typeof event.conversationId === 'string' && event.conversationId.trim()
+      ? event.conversationId.trim()
+      : typeof event.session_id === 'string' && event.session_id.trim()
+      ? event.session_id.trim()
+      : undefined;
+    if (!convId) return false;
+
+    const acc = this.accounts.find((a) => a.id === account) ?? this.accounts[0];
+    if (!acc) return false;
+
+    const key = `${acc.id}:${convId}`;
+    const now = this.now();
+    let tracker = this.trackers.get(key);
+
+    const workspacePaths = Array.isArray(event.workspacePaths) ? event.workspacePaths : [];
+    const cwd = typeof workspacePaths[0] === 'string' ? workspacePaths[0] : typeof event.cwd === 'string' ? event.cwd : undefined;
+    const transcriptPath = typeof event.transcriptPath === 'string' && event.transcriptPath.trim()
+      ? event.transcriptPath.trim()
+      : join(acc.dir, 'brain', convId, '.system_generated', 'logs', 'transcript.jsonl');
+
+    if (!tracker) {
+      tracker = {
+        key,
+        acc,
+        conversationId: convId,
+        cwd,
+        inOffice: false,
+        status: 'working',
+        statusAt: now,
+        state: createAntigravityState(),
+        transcriptPath,
+        lastSeenAt: now,
+      };
+      this.trackers.set(key, tracker);
+    } else {
+      tracker.lastSeenAt = now;
+      if (cwd && !tracker.cwd) tracker.cwd = cwd;
+      if (transcriptPath && !tracker.tail) tracker.transcriptPath = transcriptPath;
+    }
+
+    const eventName = typeof event.hook_event_name === 'string'
+      ? event.hook_event_name
+      : typeof event.eventType === 'string'
+      ? event.eventType
+      : '';
+
+    if (eventName === 'Stop') {
+      tracker.status = 'idle';
+      tracker.statusAt = now;
+      if (tracker.inOffice) this.opts.office.setStatus(tracker.key, 'idle');
+    } else if (eventName === 'PreToolUse' || eventName === 'SessionStart') {
+      tracker.status = 'working';
+      tracker.statusAt = now;
+      if (tracker.inOffice) this.opts.office.setStatus(tracker.key, 'working');
+    }
+
+    if (!tracker.inOffice && tracker.cwd) {
+      this.enter(tracker, now);
+    }
+
+    this.pump(tracker, now);
+    return true;
   }
 
   sources(): SourceInfo[] {
@@ -388,6 +455,27 @@ export class AntigravitySource implements AgentSource {
           t.status = 'idle';
           t.statusAt = now;
           if (t.inOffice) this.opts.office.setStatus(t.key, 'idle');
+        } else if (sig.type === 'github') {
+          if (t.inOffice) {
+            this.opts.office.githubEvent(t.key, sig.event, { key: sig.toolUseId, at: now, live: true });
+          }
+        } else if (sig.type === 'subagentSpawn') {
+          if (t.inOffice && sig.subagent) {
+            this.opts.office.addSub({
+              id: sig.subagent.id,
+              parentId: t.key,
+              sessionId: t.conversationId,
+              role: sig.subagent.role,
+              title: sig.subagent.prompt,
+              background: false,
+              startedAt: now,
+            });
+          }
+        } else if (sig.type === 'subagentDone') {
+          if (t.inOffice) {
+            const subId = `${t.key}#sub-${sig.callId.replace(/^call-/, '')}`;
+            this.opts.office.completeSub(subId);
+          }
         }
       }
 
@@ -400,7 +488,7 @@ export class AntigravitySource implements AgentSource {
 
     if (t.inOffice && hasChanges) {
       const summary: TranscriptSummary = {
-        tasks: [],
+        tasks: t.state.tasks ?? [],
         stats: { ...t.state.stats },
         title: t.state.title,
         model: t.state.model,

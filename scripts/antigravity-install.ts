@@ -68,18 +68,43 @@ export function hasActiveHandler(existingHooks: Rec, command?: string): boolean 
   );
 }
 
+export const HOOK_EVENTS = ['PreToolUse', 'SessionStart', 'Stop'] as const;
+
 export function planInstall(existingHooks: Rec, command: string, waitS: number): PlanResult {
   const hooks = { ...existingHooks };
   const handler = handlerFor(command, waitS);
 
   const currentHabblaud = rec(hooks['habblaud-permissions']) ? { ...(rec(hooks['habblaud-permissions']) as Rec) } : {};
-  const preToolUseList: unknown[] = Array.isArray(currentHabblaud.PreToolUse) ? [...currentHabblaud.PreToolUse] : [];
+  let changed = false;
 
+  for (const ev of HOOK_EVENTS) {
+    const existingList = Array.isArray(currentHabblaud[ev]) ? currentHabblaud[ev] : [];
+    const res = installEventHooks(existingList, handler);
+    currentHabblaud[ev] = res.list;
+    if (res.changed) changed = true;
+  }
+
+  if (currentHabblaud.enabled === false) {
+    currentHabblaud.enabled = true;
+    changed = true;
+  }
+
+  if (!changed && hasActiveHandler(existingHooks, command)) {
+    return { action: 'none', message: 'já instalado e atualizado' };
+  }
+
+  hooks['habblaud-permissions'] = currentHabblaud;
+
+  return { action: 'install', message: 'configurado hooks do Habblaud (PreToolUse, SessionStart, Stop)', hooks };
+}
+
+function installEventHooks(list: unknown[], handler: ReturnType<typeof handlerFor>): { list: unknown[]; changed: boolean } {
+  const eventList = Array.isArray(list) ? [...list] : [];
   let foundGroupIndex = -1;
   let foundHandlerIndex = -1;
 
-  for (let gi = 0; gi < preToolUseList.length; gi++) {
-    const group = rec(preToolUseList[gi]);
+  for (let gi = 0; gi < eventList.length; gi++) {
+    const group = rec(eventList[gi]);
     if (Array.isArray(group?.hooks)) {
       const hi = group.hooks.findIndex((h) => isOurHandler(h));
       if (hi >= 0) {
@@ -93,73 +118,49 @@ export function planInstall(existingHooks: Rec, command: string, waitS: number):
   let changed = false;
 
   if (foundGroupIndex >= 0) {
-    const group = { ...(rec(preToolUseList[foundGroupIndex]) as Rec) };
+    const group = { ...(rec(eventList[foundGroupIndex]) as Rec) };
     const groupHooks = Array.isArray(group.hooks) ? [...group.hooks] : [];
     const hasOtherHandlersInGroup = groupHooks.some((_, i) => i !== foundHandlerIndex);
 
     if (hasOtherHandlersInGroup) {
-      // Se houver outros handlers no grupo, remove o do Habblaud desse grupo para preservar seu matcher e integridade
       groupHooks.splice(foundHandlerIndex, 1);
       group.hooks = groupHooks;
-      preToolUseList[foundGroupIndex] = group;
-
-      // E adiciona o handler do Habblaud em um grupo exclusivo com matcher: '*'
-      preToolUseList.push({
+      eventList[foundGroupIndex] = group;
+      eventList.push({
         matcher: '*',
         hooks: [handler],
       });
       changed = true;
     } else {
-      // O grupo contém somente o nosso handler: pode atualizar comandos, timeout e garantir matcher '*'
       const existing = rec(groupHooks[foundHandlerIndex]);
       if (existing?.command !== handler.command || existing?.timeout !== handler.timeout || group.matcher !== '*') {
         groupHooks[foundHandlerIndex] = handler;
         group.matcher = '*';
         group.hooks = groupHooks;
-        preToolUseList[foundGroupIndex] = group;
+        eventList[foundGroupIndex] = group;
         changed = true;
       }
     }
   } else {
-    preToolUseList.push({
+    eventList.push({
       matcher: '*',
       hooks: [handler],
     });
     changed = true;
   }
 
-  if (currentHabblaud.enabled === false) {
-    currentHabblaud.enabled = true;
-    changed = true;
-  }
-
-  if (!changed && hasActiveHandler(existingHooks, command)) {
-    return { action: 'none', message: 'já instalado e atualizado' };
-  }
-
-  currentHabblaud.PreToolUse = preToolUseList;
-  hooks['habblaud-permissions'] = currentHabblaud;
-
-  return { action: 'install', message: 'configurado hook PreToolUse para o Habblaud', hooks };
+  return { list: eventList, changed };
 }
 
-export function planUninstall(existingHooks: Rec): PlanResult {
-  const currentHabblaud = rec(existingHooks['habblaud-permissions']);
-  if (!currentHabblaud) {
-    return { action: 'none', message: 'não estava instalado' };
-  }
-
-  const hooks = { ...existingHooks };
-  const updatedHabblaud = { ...currentHabblaud };
-  const preToolUseList: unknown[] = Array.isArray(updatedHabblaud.PreToolUse) ? [...updatedHabblaud.PreToolUse] : [];
-
-  const newPreToolUse: unknown[] = [];
+function uninstallEventHooks(list: unknown[]): { list: unknown[]; removedCount: number } {
+  const eventList = Array.isArray(list) ? [...list] : [];
+  const newEventList: unknown[] = [];
   let removedCount = 0;
 
-  for (const item of preToolUseList) {
+  for (const item of eventList) {
     const group = rec(item);
     if (!group || !Array.isArray(group.hooks)) {
-      newPreToolUse.push(item);
+      newEventList.push(item);
       continue;
     }
     const filteredHooks = group.hooks.filter((h) => {
@@ -170,25 +171,55 @@ export function planUninstall(existingHooks: Rec): PlanResult {
       return true;
     });
     if (filteredHooks.length > 0) {
-      newPreToolUse.push({ ...group, hooks: filteredHooks });
+      newEventList.push({ ...group, hooks: filteredHooks });
     }
   }
 
-  if (removedCount === 0) {
+  return { list: newEventList, removedCount };
+}
+
+export function planUninstall(existingHooks: Rec): PlanResult {
+  const currentHabblaud = rec(existingHooks['habblaud-permissions']);
+  if (!currentHabblaud) {
+    return { action: 'none', message: 'não estava instalado' };
+  }
+
+  const hooks = { ...existingHooks };
+  const updatedHabblaud = { ...currentHabblaud };
+  let totalRemoved = 0;
+
+  for (const ev of HOOK_EVENTS) {
+    const existingList = Array.isArray(updatedHabblaud[ev]) ? updatedHabblaud[ev] : [];
+    const res = uninstallEventHooks(existingList);
+    totalRemoved += res.removedCount;
+    if (res.list.length > 0) {
+      updatedHabblaud[ev] = res.list;
+    } else {
+      delete updatedHabblaud[ev];
+    }
+  }
+
+  for (const key of Object.keys(updatedHabblaud)) {
+    if (key === 'enabled' || (HOOK_EVENTS as readonly string[]).includes(key)) continue;
+    if (Array.isArray(updatedHabblaud[key])) {
+      const res = uninstallEventHooks(updatedHabblaud[key]);
+      totalRemoved += res.removedCount;
+      if (res.list.length > 0) {
+        updatedHabblaud[key] = res.list;
+      } else {
+        delete updatedHabblaud[key];
+      }
+    }
+  }
+
+  if (totalRemoved === 0) {
     return { action: 'none', message: 'nenhum hook do Habblaud encontrado' };
   }
 
-  // Se PreToolUse ficou vazio e não há outros eventos configurados no bloco habblaud-permissions, remove a entrada.
-  // Se ainda existirem outros eventos ou hooks de terceiros, preserva o restante do objeto.
-  const otherKeys = Object.keys(updatedHabblaud).filter((k) => k !== 'enabled' && k !== 'PreToolUse');
-  if (newPreToolUse.length === 0 && otherKeys.length === 0) {
+  const remainingKeys = Object.keys(updatedHabblaud).filter((k) => k !== 'enabled' && (updatedHabblaud as any)[k] !== undefined);
+  if (remainingKeys.length === 0) {
     delete hooks['habblaud-permissions'];
   } else {
-    if (newPreToolUse.length > 0) {
-      updatedHabblaud.PreToolUse = newPreToolUse;
-    } else {
-      delete updatedHabblaud.PreToolUse;
-    }
     hooks['habblaud-permissions'] = updatedHabblaud;
   }
 

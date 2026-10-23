@@ -22,29 +22,36 @@ export interface AntigravityQuotaResponse {
   groups?: AntigravityQuotaGroup[];
 }
 
-/** Tenta extrair o access token do Keychain do macOS do serviço "gemini" conta "antigravity". */
-export function getAntigravityAccessToken(): string | undefined {
-  try {
-    const raw = execFileSync('security', ['find-generic-password', '-s', 'gemini', '-a', 'antigravity', '-w'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (!raw) return undefined;
-    const b64 = raw.replace(/^go-keyring-base64:/, '');
-    const jsonStr = Buffer.from(b64, 'base64').toString('utf8');
-    const data = JSON.parse(jsonStr);
-    return data?.token?.access_token;
-  } catch {
-    return undefined;
+/** Tenta extrair o access token do Keychain do macOS ("gemini" / "antigravity") ou variável de ambiente. */
+export function getAntigravityAccessToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const explicit = env.ANTIGRAVITY_TOKEN?.trim() || env.GEMINI_CLI_TOKEN?.trim();
+  if (explicit) return explicit;
+
+  if (process.platform === 'darwin') {
+    try {
+      const raw = execFileSync('security', ['find-generic-password', '-s', 'gemini', '-a', 'antigravity', '-w'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (!raw) return undefined;
+      const b64 = raw.replace(/^go-keyring-base64:/, '');
+      const jsonStr = Buffer.from(b64, 'base64').toString('utf8');
+      const data = JSON.parse(jsonStr);
+      return data?.token?.access_token;
+    } catch {
+      return undefined;
+    }
   }
+
+  return undefined;
 }
 
 /**
  * Consulta a quota ao vivo do Antigravity na API do CloudCode / Gemini.
  * Converte as frações restantes em percentual de utilização (100 - remaining%).
  */
-export async function fetchAntigravityUsage(token?: string, now: number = Date.now()): Promise<AccountUsage | undefined> {
-  const accessToken = token ?? getAntigravityAccessToken();
+export async function fetchAntigravityUsage(token?: string, now: number = Date.now(), env: NodeJS.ProcessEnv = process.env): Promise<AccountUsage | undefined> {
+  const accessToken = token ?? getAntigravityAccessToken(env);
   if (!accessToken) return undefined;
 
   try {

@@ -131,6 +131,17 @@ export interface CodexBridgeMessage {
   resume?: boolean;
 }
 
+/** Mensagem entregue ao auxiliar do Antigravity no host (POST /api/antigravity/bridge/poll). */
+export interface AntigravityBridgeMessage {
+  id: string;
+  account: string;
+  conversationId: string;
+  text: string;
+  resume?: boolean;
+  cwd?: string;
+  antigravityHome?: string;
+}
+
 /** Erro de validação do corpo (vira 400). */
 export class InvalidRequest extends Error {}
 
@@ -222,6 +233,8 @@ export class MessageRegistry {
   private seen = new Map<string, number>();
   /** Última vez que o auxiliar do Codex no host buscou mensagens. */
   private bridgeAt?: number;
+  /** Última vez que o auxiliar do Antigravity no host buscou mensagens. */
+  private antigravityBridgeAt?: number;
   private timer: ReturnType<typeof setInterval> | null = null;
   private seq = 0;
   private readonly now: () => number;
@@ -290,9 +303,10 @@ export class MessageRegistry {
     return !!c && (!!c.run || this.bridgeRecent());
   }
 
-  /** Há como entregar ao Antigravity pelo runner local `agy agentapi`. */
+  /** Há como entregar ao Antigravity: o binário no modo Node ou o auxiliar do host visto há pouco. */
   antigravityAvailable(): boolean {
-    return !!this.opts.antigravity?.run;
+    const a = this.opts.antigravity;
+    return !!a && (!!a.run || this.antigravityBridgeRecent());
   }
 
   /**
@@ -446,6 +460,68 @@ export class MessageRegistry {
     }
   }
 
+  /**
+   * Rodada do auxiliar do Antigravity no host: marca presença e entrega as mensagens pendentes aos agentes Antigravity.
+   */
+  antigravityPoll(raw: unknown): AntigravityBridgeMessage[] {
+    if (!rec(raw)) throw new InvalidRequest(tr('esperado um objeto JSON ({})'));
+    const a = this.opts.antigravity;
+    if (!a) return [];
+    const now = this.now();
+    const was = this.antigravityAvailable();
+    this.antigravityBridgeAt = now;
+    if (!was) this.opts.office.markDirty();
+    if (a.run) return [];
+
+    const busy = new Set<string>();
+    for (const e of this.messages.values()) if (e.antigravity && e.msg.status === 'sent') busy.add(e.msg.agentId);
+    const out: AntigravityBridgeMessage[] = [];
+    for (const e of this.messages.values()) {
+      if (out.length >= INBOX_BATCH) break;
+      if (!e.antigravity || e.msg.status !== 'queued' || busy.has(e.msg.agentId)) continue;
+      busy.add(e.msg.agentId);
+      const target = this.antigravityTarget(e, now);
+      if (!target) continue;
+      this.setStatus(e, 'sent', now);
+      e.sentAt = now;
+      e.via = 'bridge';
+      const resume = this.opts.office.get(e.msg.agentId)?.status === 'idle';
+      e.resume = resume;
+      if (resume) e.msg.resumed = true;
+      out.push({
+        id: e.msg.id,
+        account: target.account,
+        conversationId: target.conversationId,
+        text: e.text,
+        ...(resume ? { resume: true } : {}),
+        ...(target.cwd ? { cwd: target.cwd } : {}),
+        ...(target.antigravityHome ? { antigravityHome: target.antigravityHome } : {}),
+      });
+    }
+    return out;
+  }
+
+  antigravityHeartbeat(raw: unknown): void {
+    if (!rec(raw)) throw new InvalidRequest('esperado um objeto JSON ({})');
+    const was = this.antigravityAvailable();
+    this.antigravityBridgeAt = this.now();
+    if (!was) this.opts.office.markDirty();
+  }
+
+  antigravityAck(raw: unknown): void {
+    const r = rec(raw);
+    if (!r || !Array.isArray(r.results)) throw new InvalidRequest('esperado {results: [{id, ok, error?}]}');
+    const now = this.now();
+    this.antigravityBridgeAt = now;
+    for (const x of ackResults(r)) {
+      const e = this.messages.get(x.id);
+      if (!e || !e.antigravity || e.via !== 'bridge') continue;
+      if (e.msg.status !== 'sent' && !(e.msg.status === 'failed' && e.late)) continue;
+      if (x.ok) this.finish(e, 'delivered', now);
+      else this.fail(e, now, x.error ?? ERR_REFUSED);
+    }
+  }
+
   /** Relógio: prazos, agente que saiu, entrega fictícia do demo, presença que venceu e limpeza das resolvidas. */
   tick(): void {
     const now = this.now();
@@ -483,6 +559,10 @@ export class MessageRegistry {
       // Sem o binário no modo Node, os agentes do Codex deixam de receber.
       if (!this.opts.codex?.run) this.opts.office.markDirty();
     }
+    if (this.antigravityBridgeAt !== undefined && now - this.antigravityBridgeAt >= this.presenceMs) {
+      this.antigravityBridgeAt = undefined;
+      if (!this.opts.antigravity?.run) this.opts.office.markDirty();
+    }
     this.pumpCodex();
     this.pumpClaude();
     this.pumpAntigravity();
@@ -492,6 +572,20 @@ export class MessageRegistry {
 
   private bridgeRecent(): boolean {
     return this.bridgeAt !== undefined && this.now() - this.bridgeAt < this.presenceMs;
+  }
+
+  private antigravityBridgeRecent(): boolean {
+    return this.antigravityBridgeAt !== undefined && this.now() - this.antigravityBridgeAt < this.presenceMs;
+  }
+
+  private antigravityTarget(e: Entry, now: number): { account: string; conversationId: string; cwd?: string; antigravityHome?: string } | undefined {
+    const a = this.opts.office.get(e.msg.agentId);
+    if (!present(a)) return void this.fail(e, now, ERR_GONE);
+    if (a.sessionId !== e.target) return void this.fail(e, now, ERR_SESSION_CHANGED);
+    const roomPath = a.roomId ? this.opts.office.roomPath?.(a.roomId) : undefined;
+    const cwd = a.cwd ?? roomPath;
+    const antigravityHome = this.opts.antigravity?.homeOf?.(a.account);
+    return { account: a.account, conversationId: a.sessionId, cwd, antigravityHome };
   }
 
   private pluginRecent(agentId: string, now = this.now()): boolean {

@@ -213,4 +213,30 @@ describe('novo agente em segundo plano (claude --bg)', () => {
     expect(d.get('d2')).toMatchObject({ status: 'opened', how: 'app', note: 'pasta nova' });
     expect(d.get('d3')).toMatchObject({ status: 'opened', how: 'app' });
   });
+
+  it('SpawnService: suporta agente novo com provedor Antigravity', async () => {
+    let antigravityRunReq: any = null;
+    const antigravityCli = async (req: any) => {
+      antigravityRunReq = req;
+      return { ok: true as const, id: '12345' };
+    };
+    const s = new SpawnService({
+      antigravityCli,
+      folderProblem: () => undefined,
+      newId: () => 'agy-1',
+    });
+
+    expect(s.hasAntigravity()).toBe(true);
+    expect(s.hasClaude()).toBe(false);
+    expect(s.available()).toBe(true);
+
+    const parsed = parseSpawn({ folder: '/p/projeto', prompt: 'ajuste o código', provider: 'antigravity' });
+    expect(parsed).toEqual({ folder: '/p/projeto', prompt: 'ajuste o código', provider: 'antigravity' });
+
+    s.submit({ folder: '/p/projeto', prompt: 'ajuste o código', provider: 'antigravity' });
+    await new Promise((ok) => setTimeout(ok, 0));
+
+    expect(antigravityRunReq).toMatchObject({ folder: '/p/projeto', prompt: 'ajuste o código', provider: 'antigravity' });
+    expect(s.get('agy-1')).toEqual({ id: 'agy-1', folder: '/p/projeto', status: 'opened', how: 'cli' });
+  });
 });

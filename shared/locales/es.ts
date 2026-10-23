@@ -1758,7 +1758,14 @@ export const ES: Readonly<Record<string, string>> = {
 
   // server/messages/http.ts
   "já há {0} mensagens esperando a entrega para este agente: espere a sessão buscar": "ya hay {0} mensajes esperando la entrega para este agente: espera a que la sesión los recoja",
-  "mensagem desconhecida: ela já foi resolvida há mais de 10 min ou o Habblaud reiniciou": "mensaje desconocido: ya se resolvió hace más de 10 min o Habblaud se reinició",
+  "mensagem desconhecida: ela já foi resolvida há mais de 35 min ou o Habblaud reiniciou": "mensaje desconocido: ya se resolvió hace más de 35 min o Habblaud se reinició",
+  "Nova tarefa": "Nueva tarea",
+  "Eventos do Antigravity: falha ao aplicar evento ({0}).": "Eventos de Antigravity: fallo al aplicar evento ({0}).",
+  "eventos do Antigravity só são aceitos pelo próprio computador (http://localhost ou http://127.0.0.1)": "los eventos de Antigravity solo se aceptan desde este equipo (http://localhost o http://127.0.0.1)",
+  "o executável do Antigravity (agy) não foi encontrado": "no se encontró el ejecutable de Antigravity (agy)",
+  "Começa na hora uma sessão do Antigravity CLI no computador, na pasta escolhida; as permissões chegam aqui.": "Inicia de inmediato una sesión de Antigravity CLI en el equipo en la carpeta elegida; los permisos llegan aquí.",
+  "✓ mensagem enviada ao Antigravity {0}…": "✓ mensaje enviado a Antigravity {0}…",
+  "Antigravity habilitado com {0} (mensagens e agentes novos).": "Antigravity habilitado con {0} (mensajes y nuevos agentes).",
 
   // server/messages/registry.ts
   "a sessão não buscou a mensagem: o plugin habblaud-mensagens está instalado e a sessão aberta?": "la sesión no recogió el mensaje: ¿el plugin habblaud-mensagens está instalado y la sesión abierta?",
