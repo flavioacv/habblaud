@@ -91,6 +91,7 @@ export class AntigravityHistory implements HistoryProvider {
           account: acc.id,
           provider: 'antigravity',
           sessionId: convId,
+          project: cwd || undefined,
           projectDir: cwd ? encodeCwd(cwd) : 'workspace',
           lastAt: entry.timestamp ?? now,
           size,

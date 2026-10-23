@@ -87,11 +87,24 @@ export class AntigravityTerminalParser implements TerminalParser {
         if (typeof rawArgs === 'string') input = rawArgs;
         else if (rawArgs) input = JSON.stringify(rawArgs, null, 2);
 
+        const argsObj = rec(rawArgs);
+        let title = name;
+        if (argsObj) {
+          const filePath = str(argsObj.Path) ?? str(argsObj.TargetFile) ?? str(argsObj.AbsolutePath);
+          if (filePath) {
+            title = filePath;
+          } else if (str(argsObj.CommandLine)) {
+            title = str(argsObj.CommandLine)!;
+          } else if (str(argsObj.Role)) {
+            title = str(argsObj.Role)!;
+          }
+        }
+
         this.emit({
           id: `step-${stepIndex}:tool:${idx}`,
           kind: 'tool',
           tool: name,
-          title: name,
+          title,
           input: input ? marked(prepare(input, INPUT_MAX)) : undefined,
           at,
         });

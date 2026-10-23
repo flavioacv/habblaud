@@ -20,6 +20,8 @@ do meio (0.**3**.0).
   O botão "+ Novo Agente" na barra superior agora permite selecionar o provedor (Claude Code ou Antigravity CLI), disparando uma nova sessão desacoplada no computador via `agy` na pasta escolhida com os pedidos informados.
 - **Antigravity: suporte a bridge no Docker (`scripts/codex-bridge.ts`).**
   O auxiliar do host que roda no Mac passa a buscar mensagens para sessões Antigravity (`/api/antigravity/bridge/poll` e `ack`) e a executar novos agentes Antigravity quando o Habblaud roda em container Docker.
+- **Antigravity: integração completa com Entregas, Linha do Tempo e Detecção de Pastas.**
+  As ferramentas de edição de arquivos (`write_file`, `edit_file`, etc.) agora qualificam para a aba de Entregas, os títulos do terminal refletem os caminhos dos arquivos, o modelo ativo e os contadores de tokens são extraídos e exibidos, e as pastas recentes de sessões Antigravity são sugeridas no seletor de projetos.
 
 
 ## [1.0.3] - 2026-10-16

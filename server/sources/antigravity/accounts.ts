@@ -74,9 +74,9 @@ export function defaultAntigravityHome(env: NodeJS.ProcessEnv = process.env, hom
   return raw ? expandHome(raw, home) : join(home, '.gemini', 'antigravity-cli');
 }
 
-/** Checa se a pasta tem a estrutura do Antigravity CLI (presence e history.jsonl). */
+/** Checa se a pasta tem a estrutura do Antigravity CLI (presence, brain ou history.jsonl). */
 export function isAntigravityHome(p: string): boolean {
-  return isDir(join(p, 'presence')) && isFile(join(p, 'history.jsonl'));
+  return isDir(join(p, 'presence')) || isDir(join(p, 'brain')) || isFile(join(p, 'history.jsonl'));
 }
 
 /**

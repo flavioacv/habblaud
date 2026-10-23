@@ -25,7 +25,7 @@ const HEADLINE_MAX = 180;
 const SUMMARY_MAX = 600;
 const REQUEST_MAX = 240;
 const MIN_TEXT = 30;
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch']);
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch', 'write_file', 'edit_file', 'replace_file_content', 'write_to_file']);
 /** Caminhos de arquivo de ver citados na resposta: em links markdown ou soltos. */
 const LINK_RE = /\]\(\s*<?([^)\s>]+?\.(?:png|jpe?g|gif|webp|svg|pdf|mp4|mov|webm|html?))(?::\d+)?>?\s*\)/gi;
 const BARE_RE = /(?:^|[\s(`"'])(\/[^\s`"'()<>]+?\.(?:png|jpe?g|gif|webp|svg|pdf|mp4|mov|webm|html?))(?=$|[\s`"'),.;:!?])/gim;

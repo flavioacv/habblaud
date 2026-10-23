@@ -20,7 +20,7 @@ export const FOLDERS_LIMIT = 15;
 const TEMP = /^(\/private)?\/(tmp|var\/folders|var\/tmp)(\/|$)/;
 /** Pastas descartáveis que o app desktop do Claude cria para sessões sem projeto. */
 const SCRATCH = /\/Application Support\/Claude\/scratch-workspaces\//;
-const WORKTREE = /^(.*?)\/\.(claude|codex)\/worktrees\/[^/]+(\/.*)?$/;
+const WORKTREE = /^(.*?)\/\.(claude|codex|gemini|antigravity)\/worktrees\/[^/]+(\/.*)?$/;
 
 function absolute(p: string): boolean {
   return p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p);

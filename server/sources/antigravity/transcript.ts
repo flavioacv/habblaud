@@ -223,16 +223,22 @@ export function parseAntigravityLine(rawLine: string, s: AntigravityState, ctx: 
     if (current) s.current = { id: activity.id, kind: desc.kind, at: createdAt, callId: opts.callId };
   };
 
+  // Modelo da sessão
+  const rawModel = str(j.model) ?? (rec(j.metadata) ? str(rec(j.metadata)?.model) : undefined);
+  if (rawModel && s.model !== rawModel) {
+    s.model = rawModel;
+    out.changed = true;
+  }
+
   // Tokens consumidos
-  const inTokens = num(j.input_tokens) ?? 0;
-  const outTokens = num(j.output_tokens) ?? 0;
+  const usage = rec(j.usage) ?? rec(j.token_usage) ?? (rec(j.metadata) ? rec(rec(j.metadata)?.usage) : undefined);
+  const inTokens = num(j.input_tokens) ?? (usage ? num(usage.prompt_tokens) ?? num(usage.input_tokens) ?? 0 : 0);
+  const outTokens = num(j.output_tokens) ?? (usage ? num(usage.candidates_tokens) ?? num(usage.completion_tokens) ?? num(usage.output_tokens) ?? 0 : 0);
   const cacheTokens = num(j.cache_read_tokens) ?? 0;
   if (inTokens > 0 || outTokens > 0 || cacheTokens > 0) {
     s.stats.tokensIn += inTokens + cacheTokens;
     s.stats.tokensOut += outTokens;
     out.changed = true;
-
-
   }
 
   // 1. Prompt do usuário (USER_INPUT)
